@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { 
@@ -18,14 +18,17 @@ import {
   Landmark,
   Plus,
   Loader2,
-  LogIn
+  LogIn,
+  Calendar,
+  Clock,
+  AlertCircle
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ff4d4f', '#13c2c2'];
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ff4d4f', '#13c2c2', '#faad14'];
 
 export default function DashboardFinanzas() {
   const [user, setUser] = useState<any>(null);
@@ -33,6 +36,9 @@ export default function DashboardFinanzas() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [creditCards, setCreditCards] = useState<any[]>([]);
   const [loans, setLoans] = useState<any[]>([]);
+
+  // Filtro de Mes (Formato YYYY-MM o 'all')
+  const [selectedMonth, setSelectedMonth] = useState<string>('all');
 
   // Estados de inicio de sesión directo
   const [authEmail, setAuthEmail] = useState('');
@@ -45,6 +51,7 @@ export default function DashboardFinanzas() {
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Alimentos');
+  const [customDate, setCustomDate] = useState(new Date().toISOString().split('T')[0]);
   const [incomeSource, setIncomeSource] = useState('salary');
   const [selectedCardId, setSelectedCardId] = useState<string>('');
   const [selectedLoanId, setSelectedLoanId] = useState<string>('');
@@ -67,7 +74,6 @@ export default function DashboardFinanzas() {
   const [newCardLimit, setNewCardLimit] = useState('');
 
   useEffect(() => {
-    // Escuchar el estado de autenticación persistentemente
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         setUser(session.user);
@@ -120,7 +126,14 @@ export default function DashboardFinanzas() {
 
   async function refreshAll(userId: string) {
     const { data: tx } = await supabase.from('transactions').select('*').eq('user_id', userId).order('date', { ascending: false });
-    if (tx) setTransactions(tx);
+    if (tx) {
+      setTransactions(tx);
+      // Configurar mes actual por defecto si existen transacciones
+      if (tx.length > 0 && selectedMonth === 'all') {
+        const latestDate = tx[0].date ? tx[0].date.substring(0, 7) : 'all';
+        setSelectedMonth(latestDate);
+      }
+    }
 
     const { data: cards } = await supabase.from('credit_cards').select('*').eq('user_id', userId);
     if (cards) setCreditCards(cards);
@@ -142,7 +155,7 @@ export default function DashboardFinanzas() {
       income_source: transType === 'income' ? incomeSource : null,
       credit_card_id: transType === 'expense' && selectedCardId ? selectedCardId : null,
       loan_id: transType === 'expense' && selectedLoanId ? selectedLoanId : null,
-      date: new Date().toISOString().split('T')[0]
+      date: customDate || new Date().toISOString().split('T')[0]
     };
 
     const { error } = await supabase.from('transactions').insert([payload]);
@@ -212,14 +225,12 @@ export default function DashboardFinanzas() {
     }
   }
 
-  // Guardado masivo con resolución directa de sesión
   async function handleConfirmMigration() {
-    // 1. Obtener la sesión real directamente de Supabase en caliente
     const { data: sessionData } = await supabase.auth.getSession();
     const currentSessionUser = sessionData?.session?.user || user;
 
     if (!currentSessionUser) {
-      alert('Tu sesión caducó o no estás conectado. Por favor vuelve a identificarte para guardar tus finanzas.');
+      alert('Tu sesión caducó o no estás conectado.');
       return;
     }
 
@@ -231,7 +242,6 @@ export default function DashboardFinanzas() {
     setIsSavingBatch(true);
 
     try {
-      // 1. Tarjetas detectadas
       if (migrationData.detected_cards && migrationData.detected_cards.length > 0) {
         const cardsToInsert = migrationData.detected_cards.map((c: any) => ({
           user_id: currentSessionUser.id,
@@ -243,7 +253,6 @@ export default function DashboardFinanzas() {
         await supabase.from('credit_cards').insert(cardsToInsert);
       }
 
-      // 2. Préstamos detectados
       if (migrationData.detected_loans && migrationData.detected_loans.length > 0) {
         const loansToInsert = migrationData.detected_loans.map((l: any) => ({
           user_id: currentSessionUser.id,
@@ -257,7 +266,6 @@ export default function DashboardFinanzas() {
         await supabase.from('loans').insert(loansToInsert);
       }
 
-      // 3. Transacciones saneadas
       const today = new Date().toISOString().split('T')[0];
       const rows = migrationData.items.map((item: any) => {
         let cleanAmount = 0;
@@ -277,7 +285,7 @@ export default function DashboardFinanzas() {
           amount: Math.abs(cleanAmount),
           category: item.category || 'Otros',
           type: item.type === 'income' ? 'income' : 'expense',
-          income_source: item.type === 'income' ? 'other' : null,
+          income_source: item.type === 'income' ? 'salary' : null,
           date: (item.date && item.date.length === 10) ? item.date : today,
           installment_number: Number(item.installment_number) || 1,
           total_installments: Number(item.total_installments) || 1
@@ -285,9 +293,7 @@ export default function DashboardFinanzas() {
       });
 
       const { error: txError } = await supabase.from('transactions').insert(rows);
-      if (txError) {
-        throw new Error('Supabase no aceptó los registros: ' + txError.message);
-      }
+      if (txError) throw new Error('Supabase no aceptó los registros: ' + txError.message);
 
       setIsImportModalOpen(false);
       setMigrationData(null);
@@ -303,11 +309,63 @@ export default function DashboardFinanzas() {
     }
   }
 
+  // Lista de meses disponibles encontrados en las transacciones
+  const availableMonths = useMemo(() => {
+    const monthsSet = new Set<string>();
+    transactions.forEach(t => {
+      if (t.date && t.date.length >= 7) {
+        monthsSet.add(t.date.substring(0, 7));
+      }
+    });
+    return Array.from(monthsSet).sort().reverse();
+  }, [transactions]);
+
+  // Transacciones filtradas por el mes seleccionado
+  const filteredTransactions = useMemo(() => {
+    if (selectedMonth === 'all') return transactions;
+    return transactions.filter(t => t.date && t.date.startsWith(selectedMonth));
+  }, [transactions, selectedMonth]);
+
+  // Totales financieros del periodo seleccionado
+  const totalIncome = useMemo(() => {
+    return filteredTransactions
+      .filter(t => t.type === 'income')
+      .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+  }, [filteredTransactions]);
+
+  // Total gastado excluyendo transferencias internas o pagos repetidos de resúmenes
+  const totalExpense = useMemo(() => {
+    return filteredTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+  }, [filteredTransactions]);
+
+  const netBalance = totalIncome - totalExpense;
+
+  // Deuda total acumulada en tarjetas
+  const totalDebt = useMemo(() => {
+    return creditCards.reduce((acc, c) => acc + Number(c.credit_limit || 0), 0);
+  }, [creditCards]);
+
+  const expenseDataByCategory = useMemo(() => {
+    return filteredTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((acc: any[], item) => {
+        const catName = item.category || 'Otros';
+        const existing = acc.find(c => c.name === catName);
+        if (existing) {
+          existing.value += Number(item.amount || 0);
+        } else {
+          acc.push({ name: catName, value: Number(item.amount || 0) });
+        }
+        return acc;
+      }, []);
+  }, [filteredTransactions]);
+
   if (loading) {
     return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500 font-sans">Cargando datos...</div>;
   }
 
-  // Pantalla de acceso si no hay sesión abierta
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
@@ -359,46 +417,41 @@ export default function DashboardFinanzas() {
     );
   }
 
-  const totalIncome = transactions
-    .filter(t => t.type === 'income')
-    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
-
-  const totalExpense = transactions
-    .filter(t => t.type === 'expense')
-    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
-
-  const netBalance = totalIncome - totalExpense;
-
-  const expenseDataByCategory = transactions
-    .filter(t => t.type === 'expense')
-    .reduce((acc: any[], item) => {
-      const catName = item.category || 'Otros';
-      const existing = acc.find(c => c.name === catName);
-      if (existing) {
-        existing.value += Number(item.amount || 0);
-      } else {
-        acc.push({ name: catName, value: Number(item.amount || 0) });
-      }
-      return acc;
-    }, []);
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Header */}
+        {/* Header con Selector de Mes */}
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
           <div>
             <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
             <p className="text-xs text-slate-500">{user?.email}</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Selector de Mes */}
+            <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+              <Calendar className="w-4 h-4 text-slate-500" />
+              <select 
+                value={selectedMonth} 
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-slate-700 outline-none cursor-pointer"
+              >
+                <option value="all">Ver Histórico Completo</option>
+                {availableMonths.map(m => (
+                  <option key={m} value={m}>
+                    {m} ({new Date(m + '-02').toLocaleString('es-AR', { month: 'long', year: 'numeric' })})
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <button 
               onClick={() => setIsImportModalOpen(true)}
               className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white text-xs font-semibold px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
             >
               <Sparkles className="w-4 h-4 text-cyan-200" />
-              Migrar o Importar con IA (PDF / Excel)
+              Migrar o Importar con IA
             </button>
             <button 
               onClick={() => supabase.auth.signOut()} 
@@ -409,36 +462,46 @@ export default function DashboardFinanzas() {
           </div>
         </header>
 
-        {/* Métricas Principales */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Métricas Principales del Mes */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
-              <p className="text-xs text-slate-400">Total Ingresos</p>
-              <h3 className="text-2xl font-bold text-emerald-600">
+              <p className="text-xs text-slate-400">Ingresos ({selectedMonth === 'all' ? 'Histórico' : selectedMonth})</p>
+              <h3 className="text-xl font-bold text-emerald-600">
                 ${totalIncome.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
               </h3>
             </div>
-            <ArrowUpCircle className="w-10 h-10 text-emerald-500 opacity-20" />
+            <ArrowUpCircle className="w-8 h-8 text-emerald-500 opacity-20" />
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
-              <p className="text-xs text-slate-400">Total Gastado</p>
-              <h3 className="text-2xl font-bold text-rose-600">
+              <p className="text-xs text-slate-400">Gastos ({selectedMonth === 'all' ? 'Histórico' : selectedMonth})</p>
+              <h3 className="text-xl font-bold text-rose-600">
                 ${totalExpense.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
               </h3>
             </div>
-            <ArrowDownCircle className="w-10 h-10 text-rose-500 opacity-20" />
+            <ArrowDownCircle className="w-8 h-8 text-rose-500 opacity-20" />
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
-              <p className="text-xs text-slate-400">Balance Neto Disponible</p>
-              <h3 className={`text-2xl font-bold ${netBalance >= 0 ? 'text-blue-600' : 'text-amber-600'}`}>
+              <p className="text-xs text-slate-400">Superávit del Período</p>
+              <h3 className={`text-xl font-bold ${netBalance >= 0 ? 'text-blue-600' : 'text-amber-600'}`}>
                 ${netBalance.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
               </h3>
             </div>
-            <Wallet className="w-10 h-10 text-blue-500 opacity-20" />
+            <Wallet className="w-8 h-8 text-blue-500 opacity-20" />
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs text-slate-400">Deuda Tarjetas Activa</p>
+              <h3 className="text-xl font-bold text-rose-700">
+                ${totalDebt.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+              </h3>
+            </div>
+            <CreditCard className="w-8 h-8 text-rose-600 opacity-20" />
           </div>
         </div>
 
@@ -466,7 +529,7 @@ export default function DashboardFinanzas() {
                     <p className="text-xs font-bold text-slate-800">{c.name}</p>
                     <p className="text-[10px] text-slate-500">Cierre: Día {c.closing_day} • Vence: Día {c.due_day}</p>
                     {c.credit_limit > 0 && (
-                      <p className="text-[10px] text-slate-400">Saldo/Límite: ${Number(c.credit_limit).toLocaleString('es-AR')}</p>
+                      <p className="text-[10px] text-rose-600 font-semibold">Saldo Deuda: ${Number(c.credit_limit).toLocaleString('es-AR')}</p>
                     )}
                   </div>
                 ))}
@@ -497,7 +560,7 @@ export default function DashboardFinanzas() {
           </div>
         </div>
 
-        {/* Formulario y Gráfico */}
+        {/* Formulario de Carga y Gráfica */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
             <div className="flex bg-slate-100 p-1 rounded-xl">
@@ -530,17 +593,29 @@ export default function DashboardFinanzas() {
                 />
               </div>
 
-              <div>
-                <label className="text-xs text-slate-500">Monto ($)</label>
-                <input 
-                  type="number" 
-                  step="0.01"
-                  value={amount}
-                  onChange={e => setAmount(e.target.value)}
-                  placeholder="0.00" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500"
-                  required 
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-500">Monto ($)</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    value={amount}
+                    onChange={e => setAmount(e.target.value)}
+                    placeholder="0.00" 
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500"
+                    required 
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Fecha del Movimiento</label>
+                  <input 
+                    type="date" 
+                    value={customDate}
+                    onChange={e => setCustomDate(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500 bg-white"
+                    required 
+                  />
+                </div>
               </div>
 
               {transType === 'expense' ? (
@@ -622,7 +697,9 @@ export default function DashboardFinanzas() {
           <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
             <div className="flex items-center gap-2 mb-2">
               <PieIcon className="w-4 h-4 text-blue-600" />
-              <h2 className="text-sm font-bold text-slate-900">Gastos Desglosados por Rubro</h2>
+              <h2 className="text-sm font-bold text-slate-900">
+                Gastos Desglosados por Rubro ({selectedMonth === 'all' ? 'Histórico' : selectedMonth})
+              </h2>
             </div>
             
             <div className="w-full h-64">
@@ -648,38 +725,52 @@ export default function DashboardFinanzas() {
                 </ResponsiveContainer>
               ) : (
                 <div className="h-full flex items-center justify-center text-xs text-slate-400">
-                  Aún no hay gastos registrados para graficar
+                  No hay gastos en este mes seleccionado
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* Historial */}
+        {/* Historial con Fecha del Movimiento y Fecha de Carga al Sistema */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-          <h3 className="text-sm font-bold text-slate-900 mb-4">Historial de Movimientos</h3>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-sm font-bold text-slate-900">
+              Historial de Movimientos ({filteredTransactions.length} registros)
+            </h3>
+            <span className="text-[11px] text-slate-400">Mostrando: {selectedMonth}</span>
+          </div>
+
           <div className="space-y-2">
-            {transactions.map(t => (
-              <div key={t.id} className="flex justify-between items-center p-3 rounded-xl border border-slate-50 hover:bg-slate-50/50">
-                <div>
-                  <p className="text-xs font-semibold text-slate-800">{t.description}</p>
-                  <span className="text-[10px] text-slate-400">
-                    {t.type === 'income' ? `Ingreso: ${t.income_source}` : `Gasto: ${t.category}`}
-                    {t.credit_card_id && ` • Tarjeta`}
-                    {t.loan_id && ` • Préstamo`}
-                    {` • ${t.date}`}
-                  </span>
+            {filteredTransactions.map(t => {
+              const loadedDate = t.created_at ? new Date(t.created_at).toLocaleDateString('es-AR') : 'Fecha s/d';
+              return (
+                <div key={t.id} className="flex justify-between items-center p-3 rounded-xl border border-slate-50 hover:bg-slate-50/50">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-800">{t.description}</p>
+                    <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                      <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono">
+                        📅 Fecha movimiento: {t.date}
+                      </span>
+                      <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-300" /> Cargado el: {loadedDate}
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        • {t.type === 'income' ? `Ingreso` : `Rubro: ${t.category}`}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {t.type === 'income' ? '+' : '-'}${Number(t.amount).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                    </span>
+                    <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500 cursor-pointer">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {t.type === 'income' ? '+' : '-'}${Number(t.amount).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                  </span>
-                  <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -761,7 +852,7 @@ export default function DashboardFinanzas() {
                       <div>
                         <p className="font-semibold text-slate-800">{item.description}</p>
                         <span className="text-[10px] text-slate-400">
-                          {item.type === 'income' ? 'Ingreso' : 'Gasto'} • {item.category}
+                          {item.type === 'income' ? 'Ingreso' : 'Gasto'} • {item.category} • Fecha: {item.date}
                         </span>
                       </div>
                       <span className={`font-bold ${item.type === 'income' ? 'text-emerald-600' : 'text-slate-900'}`}>

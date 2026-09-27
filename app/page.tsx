@@ -1,19 +1,20 @@
 ﻿'use client';
 
 import React, { useState, useEffect } from 'react';
-import supabaseClientModule from '@/lib/supabaseClient';
-const supabase = (supabaseClientModule as any)?.supabase || supabaseClientModule;
+import { createClient } from '@supabase/supabase-js';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { 
   ArrowUpCircle, 
   ArrowDownCircle, 
-  CreditCard, 
   Wallet, 
-  DollarSign, 
   Trash2, 
-  Sparkles,
-  PieChart as PieIcon
+  PieChart as PieIcon 
 } from 'lucide-react';
+
+// Conexión directa con las variables de entorno de Vercel
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ff4d4f', '#13c2c2'];
 
@@ -34,12 +35,17 @@ export default function DashboardFinanzas() {
   }, []);
 
   async function fetchSessionAndData() {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      setUser(session.user);
-      loadTransactions(session.user.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        setUser(session.user);
+        loadTransactions(session.user.id);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   async function loadTransactions(userId: string) {
@@ -85,34 +91,35 @@ export default function DashboardFinanzas() {
     }
   }
 
-  // Cálculos de Métricas
   const totalIncome = transactions
     .filter(t => t.type === 'income')
-    .reduce((acc, t) => acc + Number(t.amount), 0);
+    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
 
   const totalExpense = transactions
     .filter(t => t.type === 'expense')
-    .reduce((acc, t) => acc + Number(t.amount), 0);
+    .reduce((acc, t) => acc + Number(t.amount || 0), 0);
 
   const netBalance = totalIncome - totalExpense;
 
-  // Agrupación para el Gráfico de Gastos por Rubro
   const expenseDataByCategory = transactions
     .filter(t => t.type === 'expense')
     .reduce((acc: any[], item) => {
-      const existing = acc.find(c => c.name === item.category);
+      const catName = item.category || 'Otros';
+      const existing = acc.find(c => c.name === catName);
       if (existing) {
-        existing.value += Number(item.amount);
+        existing.value += Number(item.amount || 0);
       } else {
-        acc.push({ name: item.category, value: Number(item.amount) });
+        acc.push({ name: catName, value: Number(item.amount || 0) });
       }
       return acc;
     }, []);
 
-  if (loading) return <div className="p-8 text-center text-slate-500">Cargando panel...</div>;
+  if (loading) {
+    return <div className="p-8 text-center text-slate-500 font-sans">Cargando panel...</div>;
+  }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
         {/* Header */}
@@ -123,7 +130,7 @@ export default function DashboardFinanzas() {
           </div>
           <button 
             onClick={() => supabase.auth.signOut()} 
-            className="text-xs text-red-500 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50"
+            className="text-xs text-red-500 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
           >
             Cerrar sesión
           </button>
@@ -165,7 +172,6 @@ export default function DashboardFinanzas() {
         {/* Formulario de Carga y Gráficos */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           
-          {/* Formulario */}
           <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
             <div className="flex bg-slate-100 p-1 rounded-xl">
               <button 
@@ -191,7 +197,7 @@ export default function DashboardFinanzas() {
                   type="text" 
                   value={description}
                   onChange={e => setDescription(e.target.value)}
-                  placeholder={transType === 'income' ? 'Ej: Sueldo mensual / Trabajo extra' : 'Ej: Compra supermercado'} 
+                  placeholder={transType === 'income' ? 'Ej: Sueldo mensual / Honorarios' : 'Ej: Compra supermercado'} 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500"
                   required 
                 />
@@ -216,7 +222,7 @@ export default function DashboardFinanzas() {
                   <select 
                     value={category}
                     onChange={e => setCategory(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
                   >
                     <option value="Supermercado">Supermercado</option>
                     <option value="Servicios">Servicios / Facturas</option>
@@ -233,7 +239,7 @@ export default function DashboardFinanzas() {
                   <select 
                     value={incomeSource}
                     onChange={e => setIncomeSource(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
                   >
                     <option value="salary">Sueldo Fijo</option>
                     <option value="freelance">Honorarios / Extras</option>
@@ -252,7 +258,7 @@ export default function DashboardFinanzas() {
             </form>
           </div>
 
-          {/* Gráfico Analítico de Rubros */}
+          {/* Gráfico Analítico */}
           <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
             <div className="flex items-center gap-2 mb-2">
               <PieIcon className="w-4 h-4 text-blue-600" />
@@ -267,7 +273,7 @@ export default function DashboardFinanzas() {
                       data={expenseDataByCategory} 
                       cx="50%" 
                       cy="50%" 
-                      innerRadius={60} 
+                      innerRadius={55} 
                       outerRadius={80} 
                       paddingAngle={5} 
                       dataKey="value"
@@ -290,7 +296,7 @@ export default function DashboardFinanzas() {
 
         </div>
 
-        {/* Tabla de Movimientos */}
+        {/* Historial de Movimientos */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <h3 className="text-sm font-bold text-slate-900 mb-4">Historial de Movimientos</h3>
           <div className="space-y-2">

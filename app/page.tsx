@@ -25,7 +25,12 @@ import {
   BarChart3, 
   Zap, 
   Check, 
-  MessageSquare
+  MessageSquare,
+  UserPlus,
+  Send,
+  FileCheck,
+  AlertTriangle,
+  Lock
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -34,24 +39,34 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ff4d4f', '#13c2c2', '#faad14'];
 
+// Tu correo para habilitar la vista de Auditoría y Verificación de Cobros
+const ADMIN_EMAIL = 'drafaultimo@gmail.com';
+
 export default function FinanzasDRMIA() {
-  // Estado para alternar entre Landing Page de Venta y el Dashboard Operativo
   const [viewMode, setViewMode] = useState<'landing' | 'app'>('landing');
 
+  // Autenticación & Registro
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [transactions, setTransactions] = useState<any[]>([]);
-  const [creditCards, setCreditCards] = useState<any[]>([]);
-  const [loans, setLoans] = useState<any[]>([]);
-
-  // Filtro de Mes
-  const [selectedMonth, setSelectedMonth] = useState<string>('all');
-
-  // Estados de inicio de sesión
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
+
+  // Estado de Suscripción / Pagos
+  const [hasActivePlan, setHasActivePlan] = useState<boolean>(true);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
+  const [receiptFeedback, setReceiptFeedback] = useState<any>(null);
+  const [adminReceipts, setAdminReceipts] = useState<any[]>([]);
+
+  // Datos financieros del panel
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [creditCards, setCreditCards] = useState<any[]>([]);
+  const [loans, setLoans] = useState<any[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState<string>('all');
 
   // Formulario manual
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
@@ -67,21 +82,22 @@ export default function FinanzasDRMIA() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
   const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
 
-  // Estados de Importación IA
+  // Importador masivo IA
   const [importText, setImportText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [migrationData, setMigrationData] = useState<any>(null);
 
-  // Formulario tarjeta nueva
+  // Formulario nueva tarjeta
   const [newCardName, setNewCardName] = useState('');
   const [newCardClosing, setNewCardClosing] = useState('20');
   const [newCardDue, setNewCardDue] = useState('5');
   const [newCardLimit, setNewCardLimit] = useState('');
 
-  // Formulario edición de tarjeta
+  // Formulario edición tarjeta
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [editCardName, setEditCardName] = useState('');
   const [editCardClosing, setEditCardClosing] = useState('20');
@@ -92,7 +108,7 @@ export default function FinanzasDRMIA() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         setUser(session.user);
-        await refreshAll(session.user.id);
+        await checkSubscriptionAndLoad(session.user);
       } else {
         setUser(null);
       }
@@ -111,7 +127,7 @@ export default function FinanzasDRMIA() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         setUser(session.user);
-        await refreshAll(session.user.id);
+        await checkSubscriptionAndLoad(session.user);
       }
     } catch (err) {
       console.error(err);
@@ -120,24 +136,140 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  async function handleLogin(e: React.FormEvent) {
+  async function checkSubscriptionAndLoad(currentUser: any) {
+    if (currentUser.email === ADMIN_EMAIL) {
+      setHasActivePlan(true);
+      await loadAdminReceipts();
+    } else {
+      // Verificar si tiene un comprobante aprobado o verificado
+      const { data: receipts } = await supabase
+        .from('payment_receipts')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (receipts && receipts.length > 0) {
+        const lastReceipt = receipts[0];
+        setReceiptFeedback(lastReceipt);
+        if (lastReceipt.ai_status === 'approved_by_ai' || lastReceipt.admin_status === 'verified') {
+          setHasActivePlan(true);
+        } else {
+          setHasActivePlan(false);
+        }
+      } else {
+        setHasActivePlan(false);
+      }
+    }
+
+    await refreshAll(currentUser.id);
+  }
+
+  async function loadAdminReceipts() {
+    const { data } = await supabase
+      .from('payment_receipts')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (data) setAdminReceipts(data);
+  }
+
+  async function handleAuth(e: React.FormEvent) {
     e.preventDefault();
     setAuthLoading(true);
     setAuthError('');
+    setAuthSuccess('');
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: authEmail,
-      password: authPassword,
-    });
-
-    if (error) {
-      setAuthError(error.message);
-    } else if (data?.user) {
-      setUser(data.user);
-      await refreshAll(data.user.id);
-      setViewMode('app');
+    try {
+      if (authMode === 'login') {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        if (data?.user) {
+          setUser(data.user);
+          await checkSubscriptionAndLoad(data.user);
+          setViewMode('app');
+        }
+      } else {
+        // Registro Abierto
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        setAuthSuccess('¡Cuenta creada con éxito! Ya puedes iniciar sesión para comenzar.');
+        setAuthMode('login');
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'Error en autenticación');
+    } finally {
+      setAuthLoading(false);
     }
-    setAuthLoading(false);
+  }
+
+  // Enviar Comprobante al Chat de Validación IA
+  async function handleUploadReceipt(e: React.FormEvent) {
+    e.preventDefault();
+    if (!receiptFile || !user) return;
+    setIsUploadingReceipt(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', receiptFile);
+
+      const res = await fetch('/api/verify-receipt', { method: 'POST', body: formData });
+      const analysis = await res.json();
+
+      if (!res.ok) throw new Error(analysis.error || 'Error al validar');
+
+      const isApproved = analysis.is_valid_transfer === true;
+
+      // Registrar comprobante y veredicto en Supabase
+      const { data: inserted, error: insertError } = await supabase
+        .from('payment_receipts')
+        .insert([{
+          user_id: user.id,
+          user_email: user.email,
+          amount: analysis.amount || 0,
+          transfer_date: analysis.transfer_date || new Date().toISOString().split('T')[0],
+          sender_name: analysis.sender_name || 'No determinado',
+          alias_destination: analysis.destination || 'drm-ia',
+          ai_status: isApproved ? 'approved_by_ai' : 'rejected_by_ai',
+          ai_notes: analysis.reason || 'Sin observaciones',
+          admin_status: 'pending'
+        }])
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+
+      setReceiptFeedback(inserted);
+      if (isApproved) {
+        setHasActivePlan(true);
+        alert('¡Comprobante verificado con éxito por IA! Tu cuenta fue habilitada y notificada a Dionicio para auditoría.');
+      } else {
+        alert('Aviso de la IA: ' + (analysis.reason || 'No se pudo validar el comprobante. Será auditado manualmente.'));
+      }
+    } catch (err: any) {
+      alert('Error al enviar comprobante: ' + err.message);
+    } finally {
+      setIsUploadingReceipt(false);
+      setReceiptFile(null);
+    }
+  }
+
+  // Acción de Administrador: Confirmar verificación definitiva
+  async function handleVerifyByAdmin(receiptId: string, status: 'verified' | 'rejected') {
+    const { error } = await supabase
+      .from('payment_receipts')
+      .update({ admin_status: status })
+      .eq('id', receiptId);
+
+    if (!error) {
+      await loadAdminReceipts();
+      alert(`Comprobante marcado como: ${status === 'verified' ? 'Aprobado y Verificado' : 'Rechazado'}`);
+    }
   }
 
   async function refreshAll(userId: string) {
@@ -417,7 +549,6 @@ export default function FinanzasDRMIA() {
   if (viewMode === 'landing') {
     return (
       <div className="min-h-screen bg-[#08121f] text-slate-100 font-sans selection:bg-[#00D7FF] selection:text-[#0B192C]">
-        
         {/* Barra de Navegación DRMIA */}
         <nav className="max-w-6xl mx-auto px-6 py-6 flex justify-between items-center border-b border-slate-800/80">
           <div className="flex items-center gap-3">
@@ -434,16 +565,16 @@ export default function FinanzasDRMIA() {
 
           <div className="flex items-center gap-3">
             <button 
-              onClick={() => setViewMode('app')}
+              onClick={() => { setAuthMode('login'); setViewMode('app'); }}
               className="text-xs font-semibold text-slate-300 hover:text-white px-3 py-2 transition-colors cursor-pointer"
             >
               Iniciar Sesión
             </button>
             <button 
-              onClick={() => setViewMode('app')}
+              onClick={() => { setAuthMode('register'); setViewMode('app'); }}
               className="text-xs font-semibold bg-[#00D7FF] text-[#0B192C] px-4 py-2.5 rounded-xl hover:bg-[#00B4D8] transition-all shadow-lg shadow-[#00D7FF]/10 flex items-center gap-1.5 cursor-pointer font-bold"
             >
-              Probar Demo Gratis <ArrowRight className="w-3.5 h-3.5" />
+              Crear Cuenta Gratis <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
         </nav>
@@ -465,10 +596,10 @@ export default function FinanzasDRMIA() {
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
             <button 
-              onClick={() => setViewMode('app')}
+              onClick={() => { setAuthMode('register'); setViewMode('app'); }}
               className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-sm hover:opacity-95 transition-all shadow-xl shadow-[#00D7FF]/20 flex items-center justify-center gap-2 cursor-pointer"
             >
-              Empezar Ahora sin Costo <ArrowRight className="w-4 h-4" />
+              Crear Cuenta y Empezar <ArrowRight className="w-4 h-4" />
             </button>
             <a 
               href="https://wa.me/5492966000000?text=Hola%20DRMIA,%20quiero%20conocer%20mas%20sobre%20el%20sistema%20de%20finanzas" 
@@ -476,160 +607,71 @@ export default function FinanzasDRMIA() {
               rel="noreferrer"
               className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#0B192C] border border-slate-700 text-slate-200 font-semibold text-sm hover:bg-[#132238] transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
-              <MessageSquare className="w-4 h-4 text-[#00D7FF]" /> Hablar con Asesor
+              <MessageSquare className="w-4 h-4 text-[#00D7FF]" /> Hablar con Dionicio
             </a>
           </div>
         </header>
 
-        {/* Vista previa / Mockup del Panel */}
-        <section className="max-w-5xl mx-auto px-6 pb-20">
-          <div className="p-3 bg-[#0B192C]/80 rounded-3xl border border-slate-800 shadow-2xl backdrop-blur-md">
-            <div className="bg-[#08121f] rounded-2xl p-6 border border-slate-800/80 space-y-4">
-              <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-                <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full bg-rose-500 inline-block"></span>
-                  <span className="w-3 h-3 rounded-full bg-amber-500 inline-block"></span>
-                  <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span>
-                  <span className="text-xs text-slate-400 font-mono ml-2">finanzas.drm-ia.com/dashboard</span>
-                </div>
-                <span className="text-xs bg-[#00D7FF]/10 text-[#00D7FF] px-2.5 py-0.5 rounded-md border border-[#00D7FF]/20">
-                  Panel en Vivo
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="bg-[#132238] p-4 rounded-xl border border-slate-800">
-                  <p className="text-xs text-slate-400">Ingresos Mensuales</p>
-                  <p className="text-xl font-bold text-emerald-400">$ 2.376.869,90</p>
-                </div>
-                <div className="bg-[#132238] p-4 rounded-xl border border-slate-800">
-                  <p className="text-xs text-slate-400">Gastos Desglosados</p>
-                  <p className="text-xl font-bold text-rose-400">$ 1.480.200,00</p>
-                </div>
-                <div className="bg-[#132238] p-4 rounded-xl border border-slate-800">
-                  <p className="text-xs text-slate-400">Deuda Tarjetas Activa</p>
-                  <p className="text-xl font-bold text-[#00D7FF]">$ 896.669,90</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Pilares del Servicio */}
+        {/* Pilares */}
         <section className="max-w-6xl mx-auto px-6 py-16 border-t border-slate-800/80">
-          <div className="text-center max-w-2xl mx-auto mb-12 space-y-3">
-            <h2 className="text-2xl md:text-3xl font-bold text-white">Diseñado para la realidad económica real</h2>
-            <p className="text-sm text-slate-400">Todo lo que necesitas para tener previsibilidad financiera sin perder horas con números.</p>
-          </div>
-
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3 hover:border-[#00D7FF]/50 transition-colors">
-              <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 text-[#00D7FF] flex items-center justify-center font-bold">
-                <Zap className="w-5 h-5" />
-              </div>
+            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
+              <Zap className="w-6 h-6 text-[#00D7FF]" />
               <h3 className="text-base font-bold text-white">Importador Inteligente IA</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Copiá filas de Excel o subí extractos bancarios en PDF. Gemini 3.8 Flash interpreta rubros, cuotas y entidades automáticamente.
-              </p>
+              <p className="text-xs text-slate-400">Gemini 3.8 Flash lee resúmenes y extrae deudas, cuotas y consumos.</p>
             </div>
-
-            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3 hover:border-[#00D7FF]/50 transition-colors">
-              <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 text-[#00D7FF] flex items-center justify-center font-bold">
-                <CreditCard className="w-5 h-5" />
-              </div>
-              <h3 className="text-base font-bold text-white">Ciclos Reales de Tarjetas</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Ajustá las fechas de cierre y vencimiento específicas de cada banco (BNA, Naranja X, Mercado Pago) para anticipar tus resúmenes.
-              </p>
+            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
+              <CreditCard className="w-6 h-6 text-[#00D7FF]" />
+              <h3 className="text-base font-bold text-white">Tarjetas con Fechas Reales</h3>
+              <p className="text-xs text-slate-400">Configura el cierre y vencimiento exacto de cada banco sin confusiones.</p>
             </div>
-
-            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3 hover:border-[#00D7FF]/50 transition-colors">
-              <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 text-[#00D7FF] flex items-center justify-center font-bold">
-                <BarChart3 className="w-5 h-5" />
-              </div>
-              <h3 className="text-base font-bold text-white">Filtro Mensual & Desendeudamiento</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Supervisá tu flujo mes a mes sin mezclar períodos ni duplicar pagos de resúmenes con consumos cotidianos.
-              </p>
+            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
+              <BarChart3 className="w-6 h-6 text-[#00D7FF]" />
+              <h3 className="text-base font-bold text-white">Flujo Mensual Sin Duplicados</h3>
+              <p className="text-xs text-slate-400">Filtra mes a mes evitando que los pagos de resúmenes falseen tu saldo real.</p>
             </div>
           </div>
         </section>
 
-        {/* Planes Comerciales */}
+        {/* Planes */}
         <section className="max-w-5xl mx-auto px-6 py-16 border-t border-slate-800/80">
-          <div className="text-center max-w-xl mx-auto mb-12 space-y-3">
-            <h2 className="text-2xl md:text-3xl font-bold text-white">Planes transparentes para tu tranquilidad</h2>
-            <p className="text-sm text-slate-400">Elegí la opción que mejor se adapte a tu nivel de movimientos.</p>
+          <div className="text-center max-w-xl mx-auto mb-12 space-y-2">
+            <h2 className="text-2xl font-bold text-white">Suscripción Simple por Transferencia</h2>
+            <p className="text-xs text-slate-400">Aboná con transferencia directa al alias oficial de DRMIA.</p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-            {/* Plan Inicial */}
-            <div className="bg-[#0B192C] p-8 rounded-3xl border border-slate-800 space-y-6 flex flex-col justify-between">
-              <div className="space-y-4">
-                <h3 className="text-lg font-bold text-white">Plan Esencial</h3>
-                <p className="text-xs text-slate-400">Ideal para ordenar gastos diarios y seguimiento personal.</p>
-                <div className="text-3xl font-extrabold text-white">$ 12.000 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
-                
-                <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga manual ilimitada de gastos e ingresos</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Hasta 3 tarjetas de crédito con alertas</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Gráficos de desglose por categoría</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Filtro mensual dinámico</li>
-                </ul>
-              </div>
-
-              <button 
-                onClick={() => setViewMode('app')}
-                className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition-colors cursor-pointer"
-              >
-                Comenzar con Plan Esencial
-              </button>
+          <div className="max-w-md mx-auto bg-[#132238] p-8 rounded-3xl border-2 border-[#00D7FF] space-y-6 relative shadow-2xl">
+            <div className="text-center space-y-2">
+              <span className="text-xs font-bold text-[#00D7FF] uppercase tracking-wider">Plan Completo con IA</span>
+              <div className="text-3xl font-extrabold text-white">$ 15.000 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
+              <p className="text-xs text-slate-300">Alias de pago: <strong className="text-[#00D7FF] font-mono">drm-ia</strong></p>
             </div>
 
-            {/* Plan Pro con IA */}
-            <div className="bg-[#132238] p-8 rounded-3xl border-2 border-[#00D7FF] space-y-6 flex flex-col justify-between relative shadow-2xl shadow-[#00D7FF]/10">
-              <div className="absolute -top-3.5 right-6 bg-[#00D7FF] text-[#0B192C] text-[10px] font-extrabold uppercase px-3 py-1 rounded-full tracking-wider">
-                Recomendado
-              </div>
+            <ul className="space-y-2.5 text-xs text-slate-300">
+              <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador ilimitado con Gemini 3.8 Flash</li>
+              <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Control de tarjetas y deudas sin límite</li>
+              <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Validación automática del comprobante por IA</li>
+              <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte directo por WhatsApp con Dionicio</li>
+            </ul>
 
-              <div className="space-y-4">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  Plan Pro IA <Sparkles className="w-4 h-4 text-[#00D7FF]" />
-                </h3>
-                <p className="text-xs text-slate-400">Para emprendedores, comercios y quienes buscan automatización total.</p>
-                <div className="text-3xl font-extrabold text-white">$ 24.500 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
-                
-                <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Todo lo del Plan Esencial</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador ilimitado con Gemini 3.8 Flash</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga masiva de PDFs y Google Sheets</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Tarjetas y préstamos ilimitados</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte prioritario por WhatsApp</li>
-                </ul>
-              </div>
-
-              <button 
-                onClick={() => setViewMode('app')}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-xs hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-[#00D7FF]/20"
-              >
-                Acceder a Pro con IA
-              </button>
-            </div>
+            <button 
+              onClick={() => { setAuthMode('register'); setViewMode('app'); }}
+              className="w-full py-3.5 rounded-xl bg-[#00D7FF] text-[#0B192C] font-bold text-xs hover:bg-[#00B4D8] transition-all cursor-pointer"
+            >
+              Registrarme y Activar
+            </button>
           </div>
         </section>
 
-        {/* Footer Corporativo DRMIA */}
-        <footer className="border-t border-slate-800/80 py-10 text-center text-xs text-slate-500 space-y-2">
-          <p>© 2026 DRMIA • Soluciones Integrales e Inteligencia Artificial</p>
-          <p className="text-[11px] text-slate-600">Río Gallegos, Santa Cruz, Argentina • finanzas.drm-ia.com</p>
+        <footer className="border-t border-slate-800/80 py-8 text-center text-xs text-slate-500">
+          © 2026 DRMIA • Soluciones Integrales e Inteligencia Artificial • Río Gallegos
         </footer>
-
       </div>
     );
   }
 
   // ==========================================
-  // RENDER: PANTALLA DE ACCESO / LOGIN (SI NO HAY SESIÓN)
+  // RENDER: PANTALLA DE ACCESO / REGISTRO
   // ==========================================
   if (!user && !loading) {
     return (
@@ -645,15 +687,32 @@ export default function FinanzasDRMIA() {
             <span className="text-[10px] text-slate-500 font-mono">DRMIA AUTH</span>
           </div>
 
-          <div className="text-center space-y-2">
-            <div className="w-12 h-12 rounded-2xl bg-[#00D7FF]/10 text-[#00D7FF] mx-auto flex items-center justify-center font-bold text-2xl border border-[#00D7FF]/30">
-              ▲
-            </div>
-            <h1 className="text-xl font-bold text-white">Ingresar a tu Cuenta</h1>
-            <p className="text-xs text-slate-400">Accedé a tu panel de finanzas y deudas</p>
+          <div className="text-center space-y-1">
+            <h1 className="text-xl font-bold text-white">
+              {authMode === 'login' ? 'Ingresar a tu Cuenta' : 'Crear tu Cuenta en DRMIA'}
+            </h1>
+            <p className="text-xs text-slate-400">
+              {authMode === 'login' ? 'Accedé a tu panel de finanzas y deudas' : 'Registrate gratis en 10 segundos'}
+            </p>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          {/* Toggle entre Iniciar Sesión y Registro */}
+          <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
+            <button
+              onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }}
+              className={`flex-1 py-2 rounded-lg font-semibold transition-all ${authMode === 'login' ? 'bg-[#00D7FF] text-[#0B192C]' : 'text-slate-400'}`}
+            >
+              Iniciar Sesión
+            </button>
+            <button
+              onClick={() => { setAuthMode('register'); setAuthError(''); setAuthSuccess(''); }}
+              className={`flex-1 py-2 rounded-lg font-semibold transition-all ${authMode === 'register' ? 'bg-[#00D7FF] text-[#0B192C]' : 'text-slate-400'}`}
+            >
+              Crear Cuenta
+            </button>
+          </div>
+
+          <form onSubmit={handleAuth} className="space-y-4">
             <div>
               <label className="text-xs text-slate-400">Correo Electrónico</label>
               <input 
@@ -671,7 +730,7 @@ export default function FinanzasDRMIA() {
                 type="password" 
                 value={authPassword}
                 onChange={e => setAuthPassword(e.target.value)}
-                placeholder="••••••••" 
+                placeholder="Mínimo 6 caracteres" 
                 className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl p-3 outline-none text-white focus:border-[#00D7FF]"
                 required 
               />
@@ -681,13 +740,17 @@ export default function FinanzasDRMIA() {
               <p className="text-xs text-rose-400 bg-rose-950/40 p-2.5 rounded-lg border border-rose-800">{authError}</p>
             )}
 
+            {authSuccess && (
+              <p className="text-xs text-emerald-400 bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-800">{authSuccess}</p>
+            )}
+
             <button 
               type="submit" 
               disabled={authLoading}
               className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
-              {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
-              {authLoading ? 'Iniciando sesión...' : 'Ingresar al Panel'}
+              {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : authMode === 'login' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
+              {authLoading ? 'Procesando...' : authMode === 'login' ? 'Entrar al Panel' : 'Registrarme Gratis'}
             </button>
           </form>
         </div>
@@ -696,29 +759,122 @@ export default function FinanzasDRMIA() {
   }
 
   // ==========================================
-  // RENDER: PANEL OPERATIVO (DASHBOARD)
+  // RENDER: PANTALLA DE PAGO / ACTIVACIÓN POR TRANSFERENCIA (CHAT IA)
+  // ==========================================
+  if (user && !hasActivePlan) {
+    return (
+      <div className="min-h-screen bg-[#08121f] text-slate-100 flex items-center justify-center p-4 font-sans">
+        <div className="bg-[#0B192C] max-w-lg w-full p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-6">
+          <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+            <div className="flex items-center gap-2">
+              <Lock className="w-5 h-5 text-[#00D7FF]" />
+              <h2 className="text-base font-bold text-white">Activar tu Suscripción SaaS</h2>
+            </div>
+            <button onClick={() => supabase.auth.signOut()} className="text-xs text-red-400 hover:underline">
+              Cerrar Sesión
+            </button>
+          </div>
+
+          <div className="p-4 bg-[#132238] rounded-2xl border border-slate-700/80 space-y-2 text-xs">
+            <span className="font-bold text-white flex items-center gap-1.5">
+              <Landmark className="w-4 h-4 text-[#00D7FF]" /> Datos para Transferencia Bancaria
+            </span>
+            <p className="text-slate-300">Alias Oficial: <strong className="text-[#00D7FF] font-mono text-sm">drm-ia</strong></p>
+            <p className="text-slate-400">Titular: DRMIA • Dionicio Rafael Martin</p>
+            <p className="text-slate-400">Valor de la suscripción: <strong>$15.000 / mes</strong></p>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-[#00D7FF]" />
+              <h3 className="text-xs font-bold text-white">Chat Interno de Verificación con IA</h3>
+            </div>
+            <p className="text-xs text-slate-400">
+              Adjuntá la captura o PDF de tu comprobante. Nuestro auditor IA lo interpretará en segundos para habilitar tu cuenta al instante y dejar la alerta de control a Dionicio.
+            </p>
+
+            <form onSubmit={handleUploadReceipt} className="space-y-3">
+              <div className="border-2 border-dashed border-slate-700 rounded-2xl p-5 text-center hover:border-[#00D7FF] transition-colors">
+                <input 
+                  type="file" 
+                  id="receipt-upload"
+                  accept="image/*,application/pdf"
+                  className="hidden"
+                  onChange={e => setReceiptFile(e.target.files?.[0] || null)}
+                />
+                <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-1.5">
+                  <UploadCloud className="w-8 h-8 text-[#00D7FF]" />
+                  <span className="text-xs font-semibold text-slate-300">
+                    {receiptFile ? `Archivo: ${receiptFile.name}` : 'Seleccionar captura del comprobante'}
+                  </span>
+                  <span className="text-[10px] text-slate-500">Formatos JPG, PNG o PDF</span>
+                </label>
+              </div>
+
+              <button 
+                type="submit"
+                disabled={!receiptFile || isUploadingReceipt}
+                className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                {isUploadingReceipt ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {isUploadingReceipt ? 'Gemini 3.8 Flash auditando comprobante...' : 'Enviar Comprobante a la IA'}
+              </button>
+            </form>
+
+            {receiptFeedback && (
+              <div className={`p-3 rounded-xl border text-xs space-y-1 ${receiptFeedback.ai_status === 'approved_by_ai' ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300' : 'bg-amber-950/40 border-amber-500/50 text-amber-300'}`}>
+                <p className="font-bold flex items-center gap-1">
+                  {receiptFeedback.ai_status === 'approved_by_ai' ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                  Estado IA: {receiptFeedback.ai_status === 'approved_by_ai' ? 'Comprobante Aprobado' : 'En Revisión'}
+                </p>
+                <p className="text-[11px] text-slate-300">{receiptFeedback.ai_notes}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // RENDER: PANEL PRINCIPAL (DASHBOARD)
   // ==========================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Header con Botón de Retorno a la Landing */}
+        {/* Header con Control Admin y Selector */}
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setViewMode('landing')}
-              title="Ver portada comercial"
-              className="w-10 h-10 rounded-xl bg-slate-900 text-[#00D7FF] flex items-center justify-center font-bold text-lg hover:opacity-90 transition-opacity cursor-pointer"
+              title="Volver a la portada"
+              className="w-10 h-10 rounded-xl bg-[#0B192C] text-[#00D7FF] flex items-center justify-center font-bold text-lg cursor-pointer"
             >
               ▲
             </button>
             <div>
               <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
-              <p className="text-xs text-slate-500">{user?.email}</p>
+              <p className="text-xs text-slate-500 flex items-center gap-2">
+                {user?.email}
+                {user?.email === ADMIN_EMAIL && (
+                  <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-[10px] font-bold">ADMIN</span>
+                )}
+              </p>
             </div>
           </div>
           
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Botón especial para el Admin para auditar comprobantes recibidos */}
+            {user?.email === ADMIN_EMAIL && (
+              <button 
+                onClick={() => setIsAdminPanelOpen(true)}
+                className="bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer"
+              >
+                <FileCheck className="w-4 h-4" /> Auditar Pagos ({adminReceipts.filter(r => r.admin_status === 'pending').length})
+              </button>
+            )}
+
             <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
               <Calendar className="w-4 h-4 text-slate-500" />
               <select 
@@ -740,7 +896,7 @@ export default function FinanzasDRMIA() {
               className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white text-xs font-semibold px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
             >
               <Sparkles className="w-4 h-4 text-cyan-200" />
-              Migrar o Importar con IA
+              Migrar con IA
             </button>
             <button 
               onClick={() => supabase.auth.signOut()} 
@@ -751,7 +907,7 @@ export default function FinanzasDRMIA() {
           </div>
         </header>
 
-        {/* Métricas Principales del Mes */}
+        {/* Métricas Principales */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
@@ -794,7 +950,7 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Bloque: Tarjetas de Crédito */}
+        {/* Tarjetas de Crédito */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
@@ -1084,6 +1240,64 @@ export default function FinanzasDRMIA() {
         </div>
 
       </div>
+
+      {/* Modal: Panel Maestro de Auditoría de Comprobantes (Solo Admin) */}
+      {isAdminPanelOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-4xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <FileCheck className="w-5 h-5 text-purple-600" />
+                <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos y Comprobantes Recibidos</h3>
+              </div>
+              <button onClick={() => setIsAdminPanelOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3">
+              {adminReceipts.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-8">No hay comprobantes pendientes de auditoría.</p>
+              ) : (
+                adminReceipts.map(r => (
+                  <div key={r.id} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-900">{r.user_email}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${r.ai_status === 'approved_by_ai' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                          IA: {r.ai_status}
+                        </span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${r.admin_status === 'verified' ? 'bg-blue-100 text-blue-700' : 'bg-slate-200 text-slate-700'}`}>
+                          Admin: {r.admin_status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        Monto: <strong>${Number(r.amount).toLocaleString('es-AR')}</strong> • Fecha: {r.transfer_date} • Pagador: {r.sender_name}
+                      </p>
+                      <p className="text-[11px] text-slate-400">Veredicto IA: {r.ai_notes}</p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => handleVerifyByAdmin(r.id, 'verified')}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-xl font-semibold cursor-pointer"
+                      >
+                        Confirmar Pago
+                      </button>
+                      <button 
+                        onClick={() => handleVerifyByAdmin(r.id, 'rejected')}
+                        className="bg-rose-600 hover:bg-rose-700 text-white text-xs px-3 py-1.5 rounded-xl font-semibold cursor-pointer"
+                      >
+                        Rechazar
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Editar Tarjeta */}
       {isEditCardModalOpen && (

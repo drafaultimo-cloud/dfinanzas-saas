@@ -8,10 +8,14 @@ import {
   ArrowDownCircle, 
   Wallet, 
   Trash2, 
-  PieChart as PieIcon 
+  PieChart as PieIcon,
+  Sparkles,
+  CreditCard,
+  UploadCloud,
+  CheckCircle2,
+  X
 } from 'lucide-react';
 
-// Conexión directa con las variables de entorno de Vercel
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -22,13 +26,21 @@ export default function DashboardFinanzas() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [creditCards, setCreditCards] = useState<any[]>([]);
   
-  // Estados del Formulario
+  // Formulario manual
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Alimentos');
   const [incomeSource, setIncomeSource] = useState('salary');
+
+  // Modal y Parser de Resúmenes
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [parsedItems, setParsedItems] = useState<any[]>([]);
+  const [statementSummary, setStatementSummary] = useState<any>(null);
+  const [selectedCardId, setSelectedCardId] = useState<string>('');
 
   useEffect(() => {
     fetchSessionAndData();
@@ -40,6 +52,7 @@ export default function DashboardFinanzas() {
       if (session?.user) {
         setUser(session.user);
         loadTransactions(session.user.id);
+        loadCards(session.user.id);
       }
     } catch (err) {
       console.error(err);
@@ -49,14 +62,22 @@ export default function DashboardFinanzas() {
   }
 
   async function loadTransactions(userId: string) {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('transactions')
       .select('*')
       .eq('user_id', userId)
       .order('date', { ascending: false });
+    if (data) setTransactions(data);
+  }
 
-    if (!error && data) {
-      setTransactions(data);
+  async function loadCards(userId: string) {
+    const { data } = await supabase
+      .from('credit_cards')
+      .select('*')
+      .eq('user_id', userId);
+    if (data && data.length > 0) {
+      setCreditCards(data);
+      setSelectedCardId(data[0].id);
     }
   }
 
@@ -86,8 +107,64 @@ export default function DashboardFinanzas() {
 
   async function handleDelete(id: string) {
     const { error } = await supabase.from('transactions').delete().eq('id', id);
-    if (!error && user) {
+    if (!error && user) loadTransactions(user.id);
+  }
+
+  // Subir y Procesar Resumen con Gemini
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingFile(true);
+    setParsedItems([]);
+    setStatementSummary(null);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('/api/parse-statement', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error procesando el resumen');
+
+      setStatementSummary(data);
+      setParsedItems(data.items || []);
+    } catch (err: any) {
+      alert('Fallo en el análisis: ' + err.message);
+    } finally {
+      setUploadingFile(false);
+    }
+  }
+
+  // Confirmar y Guardar masivamente en Supabase
+  async function handleConfirmBatch() {
+    if (!user || parsedItems.length === 0) return;
+
+    const rows = parsedItems.map(item => ({
+      user_id: user.id,
+      description: item.description,
+      amount: Number(item.amount),
+      category: item.category || 'Otros',
+      type: 'expense',
+      date: item.date || new Date().toISOString().split('T')[0],
+      installment_number: item.installment_number || 1,
+      total_installments: item.total_installments || 1,
+      credit_card_id: selectedCardId || null
+    }));
+
+    const { error } = await supabase.from('transactions').insert(rows);
+    if (!error) {
+      setIsModalOpen(false);
+      setParsedItems([]);
+      setStatementSummary(null);
       loadTransactions(user.id);
+      alert(`¡Se guardaron ${rows.length} consumos con éxito!`);
+    } else {
+      alert('Error guardando consumos: ' + error.message);
     }
   }
 
@@ -114,26 +191,33 @@ export default function DashboardFinanzas() {
       return acc;
     }, []);
 
-  if (loading) {
-    return <div className="p-8 text-center text-slate-500 font-sans">Cargando panel...</div>;
-  }
+  if (loading) return <div className="p-8 text-center text-slate-500 font-sans">Cargando panel...</div>;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
         {/* Header */}
-        <header className="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
           <div>
             <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
             <p className="text-xs text-slate-500">{user?.email}</p>
           </div>
-          <button 
-            onClick={() => supabase.auth.signOut()} 
-            className="text-xs text-red-500 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
-          >
-            Cerrar sesión
-          </button>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setIsModalOpen(true)}
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-semibold px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm hover:opacity-95"
+            >
+              <Sparkles className="w-4 h-4 text-cyan-200" />
+              Escanear Resumen Tarjeta (IA)
+            </button>
+            <button 
+              onClick={() => supabase.auth.signOut()} 
+              className="text-xs text-red-500 border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition-colors"
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </header>
 
         {/* Métricas Principales */}
@@ -169,9 +253,8 @@ export default function DashboardFinanzas() {
           </div>
         </div>
 
-        {/* Formulario de Carga y Gráficos */}
+        {/* Formulario y Gráfico */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          
           <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
             <div className="flex bg-slate-100 p-1 rounded-xl">
               <button 
@@ -258,7 +341,6 @@ export default function DashboardFinanzas() {
             </form>
           </div>
 
-          {/* Gráfico Analítico */}
           <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
             <div className="flex items-center gap-2 mb-2">
               <PieIcon className="w-4 h-4 text-blue-600" />
@@ -293,10 +375,9 @@ export default function DashboardFinanzas() {
               )}
             </div>
           </div>
-
         </div>
 
-        {/* Historial de Movimientos */}
+        {/* Historial */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <h3 className="text-sm font-bold text-slate-900 mb-4">Historial de Movimientos</h3>
           <div className="space-y-2">
@@ -305,7 +386,9 @@ export default function DashboardFinanzas() {
                 <div>
                   <p className="text-xs font-semibold text-slate-800">{t.description}</p>
                   <span className="text-[10px] text-slate-400">
-                    {t.type === 'income' ? `Ingreso: ${t.income_source}` : `Gasto: ${t.category}`} • {t.date}
+                    {t.type === 'income' ? `Ingreso: ${t.income_source}` : `Gasto: ${t.category}`}
+                    {t.total_installments > 1 && ` (Cuota ${t.installment_number}/${t.total_installments})`}
+                    {` • ${t.date}`}
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
@@ -322,6 +405,80 @@ export default function DashboardFinanzas() {
         </div>
 
       </div>
+
+      {/* Modal: Escaneo de Resumen con IA */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <CreditCard className="w-5 h-5 text-blue-600" />
+                <h3 className="text-base font-bold text-slate-900">Escanear Resumen con IA</h3>
+              </div>
+              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Zona de Carga */}
+            <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-blue-500 transition-colors">
+              <input 
+                type="file" 
+                id="statement-input"
+                accept="image/*,application/pdf" 
+                className="hidden" 
+                onChange={handleFileUpload} 
+                disabled={uploadingFile}
+              />
+              <label htmlFor="statement-input" className="cursor-pointer flex flex-col items-center gap-2">
+                <UploadCloud className="w-10 h-10 text-blue-500" />
+                <span className="text-xs font-semibold text-slate-700">
+                  {uploadingFile ? 'Analizando con Gemini IA...' : 'Haz clic para subir foto o PDF del resumen'}
+                </span>
+                <span className="text-[10px] text-slate-400">Soporta Visa, Mastercard, resúmenes bancarios y billeteras</span>
+              </label>
+            </div>
+
+            {/* Previsualización de ítems extraídos */}
+            {parsedItems.length > 0 && (
+              <div className="flex-1 overflow-y-auto space-y-3">
+                <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl text-xs">
+                  <div>
+                    <span className="font-semibold text-slate-700">{statementSummary?.bank_or_card || 'Resumen detectado'}</span>
+                    <p className="text-[11px] text-slate-400">Total detectado: ${statementSummary?.total_amount?.toLocaleString('es-AR')}</p>
+                  </div>
+                  <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                    {parsedItems.length} consumos listos
+                  </span>
+                </div>
+
+                <div className="space-y-1.5">
+                  {parsedItems.map((item, idx) => (
+                    <div key={idx} className="flex justify-between items-center text-xs p-2.5 rounded-xl border border-slate-100 bg-white">
+                      <div>
+                        <p className="font-semibold text-slate-800">{item.description}</p>
+                        <span className="text-[10px] text-slate-400">
+                          {item.category} {item.total_installments > 1 && `• Cuota ${item.installment_number}/${item.total_installments}`}
+                        </span>
+                      </div>
+                      <span className="font-bold text-slate-900">${Number(item.amount).toLocaleString('es-AR')}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <button 
+                  onClick={handleConfirmBatch}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-3 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Confirmar e importar {parsedItems.length} consumos al panel
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

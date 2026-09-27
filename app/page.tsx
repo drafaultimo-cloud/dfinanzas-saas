@@ -4,24 +4,28 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { 
+  Sparkles, 
+  CreditCard, 
+  CheckCircle2, 
+  X, 
+  Landmark, 
+  Plus, 
+  Loader2, 
+  LogIn, 
+  Calendar, 
+  Clock, 
+  Pencil, 
+  Trash2, 
   ArrowUpCircle, 
   ArrowDownCircle, 
   Wallet, 
-  Trash2, 
-  PieChart as PieIcon,
-  Sparkles,
-  CreditCard,
-  FileSpreadsheet,
-  UploadCloud,
-  CheckCircle2,
-  X,
-  Landmark,
-  Plus,
-  Loader2,
-  LogIn,
-  Calendar,
-  Clock,
-  Pencil
+  UploadCloud, 
+  ArrowRight, 
+  ShieldCheck, 
+  BarChart3, 
+  Zap, 
+  Check, 
+  MessageSquare
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -30,7 +34,10 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ff4d4f', '#13c2c2', '#faad14'];
 
-export default function DashboardFinanzas() {
+export default function FinanzasDRMIA() {
+  // Estado para alternar entre Landing Page de Venta y el Dashboard Operativo
+  const [viewMode, setViewMode] = useState<'landing' | 'app'>('landing');
+
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -40,13 +47,13 @@ export default function DashboardFinanzas() {
   // Filtro de Mes
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
 
-  // Estados de inicio de sesión directo
+  // Estados de inicio de sesión
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
 
-  // Formulario manual de transacciones
+  // Formulario manual
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
@@ -61,20 +68,20 @@ export default function DashboardFinanzas() {
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
   const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
 
-  // Estados de Importación
+  // Estados de Importación IA
   const [importText, setImportText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [migrationData, setMigrationData] = useState<any>(null);
 
-  // Formulario nueva tarjeta manual
+  // Formulario tarjeta nueva
   const [newCardName, setNewCardName] = useState('');
   const [newCardClosing, setNewCardClosing] = useState('20');
   const [newCardDue, setNewCardDue] = useState('5');
   const [newCardLimit, setNewCardLimit] = useState('');
 
-  // Formulario edición de tarjeta existente
+  // Formulario edición de tarjeta
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [editCardName, setEditCardName] = useState('');
   const [editCardClosing, setEditCardClosing] = useState('20');
@@ -128,6 +135,7 @@ export default function DashboardFinanzas() {
     } else if (data?.user) {
       setUser(data.user);
       await refreshAll(data.user.id);
+      setViewMode('app');
     }
     setAuthLoading(false);
   }
@@ -199,7 +207,6 @@ export default function DashboardFinanzas() {
     }
   }
 
-  // Abrir modal de edición con los datos actuales de la tarjeta
   function openEditCard(card: any) {
     setEditingCardId(card.id);
     setEditCardName(card.name);
@@ -209,7 +216,6 @@ export default function DashboardFinanzas() {
     setIsEditCardModalOpen(true);
   }
 
-  // Guardar modificaciones de la tarjeta en Supabase
   async function handleUpdateCard(e: React.FormEvent) {
     e.preventDefault();
     if (!editingCardId || !user) return;
@@ -234,15 +240,10 @@ export default function DashboardFinanzas() {
     }
   }
 
-  // Eliminar tarjeta
   async function handleDeleteCard(cardId: string) {
-    if (!confirm('¿Deseas eliminar esta tarjeta? (No afectará las transacciones ya registradas)')) return;
+    if (!confirm('¿Deseas eliminar esta tarjeta?')) return;
     const { error } = await supabase.from('credit_cards').delete().eq('id', cardId);
-    if (!error && user) {
-      refreshAll(user.id);
-    } else if (error) {
-      alert('Error al eliminar tarjeta: ' + error.message);
-    }
+    if (!error && user) refreshAll(user.id);
   }
 
   async function handleDelete(id: string) {
@@ -410,51 +411,280 @@ export default function DashboardFinanzas() {
       }, []);
   }, [filteredTransactions]);
 
-  if (loading) {
-    return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500 font-sans">Cargando datos...</div>;
+  // ==========================================
+  // RENDER: LANDING PAGE DE VENTA (ESTÉTICA DRMIA)
+  // ==========================================
+  if (viewMode === 'landing') {
+    return (
+      <div className="min-h-screen bg-[#08121f] text-slate-100 font-sans selection:bg-[#00D7FF] selection:text-[#0B192C]">
+        
+        {/* Barra de Navegación DRMIA */}
+        <nav className="max-w-6xl mx-auto px-6 py-6 flex justify-between items-center border-b border-slate-800/80">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 border border-[#00D7FF]/30 flex items-center justify-center text-[#00D7FF] font-bold text-xl shadow-[0_0_15px_rgba(0,215,255,0.2)]">
+              ▲
+            </div>
+            <div>
+              <span className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                DRMIA <span className="text-xs bg-[#00D7FF]/10 text-[#00D7FF] px-2.5 py-0.5 rounded-full border border-[#00D7FF]/30">Finanzas SaaS</span>
+              </span>
+              <p className="text-[10px] text-slate-400">Soluciones Integrales para tu Negocio</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setViewMode('app')}
+              className="text-xs font-semibold text-slate-300 hover:text-white px-3 py-2 transition-colors cursor-pointer"
+            >
+              Iniciar Sesión
+            </button>
+            <button 
+              onClick={() => setViewMode('app')}
+              className="text-xs font-semibold bg-[#00D7FF] text-[#0B192C] px-4 py-2.5 rounded-xl hover:bg-[#00B4D8] transition-all shadow-lg shadow-[#00D7FF]/10 flex items-center gap-1.5 cursor-pointer font-bold"
+            >
+              Probar Demo Gratis <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </nav>
+
+        {/* Hero Section */}
+        <header className="max-w-4xl mx-auto px-6 pt-16 pb-14 text-center space-y-6">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0B192C] border border-[#00D7FF]/30 text-[#00D7FF] text-xs font-semibold shadow-sm">
+            <Sparkles className="w-3.5 h-3.5 text-[#00D7FF]" />
+            Potenciado con Google Gemini 3.8 Flash
+          </div>
+
+          <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-tight">
+            Controlá tus finanzas, tarjetas y deudas con <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00D7FF] to-cyan-400">Inteligencia Artificial</span>
+          </h1>
+
+          <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto font-normal leading-relaxed">
+            Olvidate de cargar gastos uno por uno en Excel. Subí tu resumen bancario o planilla y nuestra IA organiza tus consumos, detecta tus tarjetas y calcula tu balance real en 5 segundos.
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+            <button 
+              onClick={() => setViewMode('app')}
+              className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-sm hover:opacity-95 transition-all shadow-xl shadow-[#00D7FF]/20 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              Empezar Ahora sin Costo <ArrowRight className="w-4 h-4" />
+            </button>
+            <a 
+              href="https://wa.me/5492966000000?text=Hola%20DRMIA,%20quiero%20conocer%20mas%20sobre%20el%20sistema%20de%20finanzas" 
+              target="_blank" 
+              rel="noreferrer"
+              className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#0B192C] border border-slate-700 text-slate-200 font-semibold text-sm hover:bg-[#132238] transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <MessageSquare className="w-4 h-4 text-[#00D7FF]" /> Hablar con Asesor
+            </a>
+          </div>
+        </header>
+
+        {/* Vista previa / Mockup del Panel */}
+        <section className="max-w-5xl mx-auto px-6 pb-20">
+          <div className="p-3 bg-[#0B192C]/80 rounded-3xl border border-slate-800 shadow-2xl backdrop-blur-md">
+            <div className="bg-[#08121f] rounded-2xl p-6 border border-slate-800/80 space-y-4">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-rose-500 inline-block"></span>
+                  <span className="w-3 h-3 rounded-full bg-amber-500 inline-block"></span>
+                  <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span>
+                  <span className="text-xs text-slate-400 font-mono ml-2">finanzas.drm-ia.com/dashboard</span>
+                </div>
+                <span className="text-xs bg-[#00D7FF]/10 text-[#00D7FF] px-2.5 py-0.5 rounded-md border border-[#00D7FF]/20">
+                  Panel en Vivo
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-[#132238] p-4 rounded-xl border border-slate-800">
+                  <p className="text-xs text-slate-400">Ingresos Mensuales</p>
+                  <p className="text-xl font-bold text-emerald-400">$ 2.376.869,90</p>
+                </div>
+                <div className="bg-[#132238] p-4 rounded-xl border border-slate-800">
+                  <p className="text-xs text-slate-400">Gastos Desglosados</p>
+                  <p className="text-xl font-bold text-rose-400">$ 1.480.200,00</p>
+                </div>
+                <div className="bg-[#132238] p-4 rounded-xl border border-slate-800">
+                  <p className="text-xs text-slate-400">Deuda Tarjetas Activa</p>
+                  <p className="text-xl font-bold text-[#00D7FF]">$ 896.669,90</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Pilares del Servicio */}
+        <section className="max-w-6xl mx-auto px-6 py-16 border-t border-slate-800/80">
+          <div className="text-center max-w-2xl mx-auto mb-12 space-y-3">
+            <h2 className="text-2xl md:text-3xl font-bold text-white">Diseñado para la realidad económica real</h2>
+            <p className="text-sm text-slate-400">Todo lo que necesitas para tener previsibilidad financiera sin perder horas con números.</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3 hover:border-[#00D7FF]/50 transition-colors">
+              <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 text-[#00D7FF] flex items-center justify-center font-bold">
+                <Zap className="w-5 h-5" />
+              </div>
+              <h3 className="text-base font-bold text-white">Importador Inteligente IA</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Copiá filas de Excel o subí extractos bancarios en PDF. Gemini 3.8 Flash interpreta rubros, cuotas y entidades automáticamente.
+              </p>
+            </div>
+
+            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3 hover:border-[#00D7FF]/50 transition-colors">
+              <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 text-[#00D7FF] flex items-center justify-center font-bold">
+                <CreditCard className="w-5 h-5" />
+              </div>
+              <h3 className="text-base font-bold text-white">Ciclos Reales de Tarjetas</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Ajustá las fechas de cierre y vencimiento específicas de cada banco (BNA, Naranja X, Mercado Pago) para anticipar tus resúmenes.
+              </p>
+            </div>
+
+            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3 hover:border-[#00D7FF]/50 transition-colors">
+              <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 text-[#00D7FF] flex items-center justify-center font-bold">
+                <BarChart3 className="w-5 h-5" />
+              </div>
+              <h3 className="text-base font-bold text-white">Filtro Mensual & Desendeudamiento</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Supervisá tu flujo mes a mes sin mezclar períodos ni duplicar pagos de resúmenes con consumos cotidianos.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Planes Comerciales */}
+        <section className="max-w-5xl mx-auto px-6 py-16 border-t border-slate-800/80">
+          <div className="text-center max-w-xl mx-auto mb-12 space-y-3">
+            <h2 className="text-2xl md:text-3xl font-bold text-white">Planes transparentes para tu tranquilidad</h2>
+            <p className="text-sm text-slate-400">Elegí la opción que mejor se adapte a tu nivel de movimientos.</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+            {/* Plan Inicial */}
+            <div className="bg-[#0B192C] p-8 rounded-3xl border border-slate-800 space-y-6 flex flex-col justify-between">
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold text-white">Plan Esencial</h3>
+                <p className="text-xs text-slate-400">Ideal para ordenar gastos diarios y seguimiento personal.</p>
+                <div className="text-3xl font-extrabold text-white">$ 12.000 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
+                
+                <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga manual ilimitada de gastos e ingresos</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Hasta 3 tarjetas de crédito con alertas</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Gráficos de desglose por categoría</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Filtro mensual dinámico</li>
+                </ul>
+              </div>
+
+              <button 
+                onClick={() => setViewMode('app')}
+                className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Comenzar con Plan Esencial
+              </button>
+            </div>
+
+            {/* Plan Pro con IA */}
+            <div className="bg-[#132238] p-8 rounded-3xl border-2 border-[#00D7FF] space-y-6 flex flex-col justify-between relative shadow-2xl shadow-[#00D7FF]/10">
+              <div className="absolute -top-3.5 right-6 bg-[#00D7FF] text-[#0B192C] text-[10px] font-extrabold uppercase px-3 py-1 rounded-full tracking-wider">
+                Recomendado
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  Plan Pro IA <Sparkles className="w-4 h-4 text-[#00D7FF]" />
+                </h3>
+                <p className="text-xs text-slate-400">Para emprendedores, comercios y quienes buscan automatización total.</p>
+                <div className="text-3xl font-extrabold text-white">$ 24.500 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
+                
+                <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Todo lo del Plan Esencial</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador ilimitado con Gemini 3.8 Flash</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga masiva de PDFs y Google Sheets</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Tarjetas y préstamos ilimitados</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte prioritario por WhatsApp</li>
+                </ul>
+              </div>
+
+              <button 
+                onClick={() => setViewMode('app')}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-xs hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-[#00D7FF]/20"
+              >
+                Acceder a Pro con IA
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Footer Corporativo DRMIA */}
+        <footer className="border-t border-slate-800/80 py-10 text-center text-xs text-slate-500 space-y-2">
+          <p>© 2026 DRMIA • Soluciones Integrales e Inteligencia Artificial</p>
+          <p className="text-[11px] text-slate-600">Río Gallegos, Santa Cruz, Argentina • finanzas.drm-ia.com</p>
+        </footer>
+
+      </div>
+    );
   }
 
-  if (!user) {
+  // ==========================================
+  // RENDER: PANTALLA DE ACCESO / LOGIN (SI NO HAY SESIÓN)
+  // ==========================================
+  if (!user && !loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
-        <div className="bg-white max-w-md w-full p-8 rounded-3xl border border-slate-100 shadow-xl space-y-6">
+      <div className="min-h-screen bg-[#08121f] text-slate-100 flex items-center justify-center p-4 font-sans">
+        <div className="bg-[#0B192C] max-w-md w-full p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-6">
+          <div className="flex justify-between items-center">
+            <button 
+              onClick={() => setViewMode('landing')}
+              className="text-xs text-[#00D7FF] hover:underline flex items-center gap-1 cursor-pointer"
+            >
+              ← Volver a la portada
+            </button>
+            <span className="text-[10px] text-slate-500 font-mono">DRMIA AUTH</span>
+          </div>
+
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
-            <p className="text-xs text-slate-500">Ingresa con tu cuenta para ver y guardar tus finanzas</p>
+            <div className="w-12 h-12 rounded-2xl bg-[#00D7FF]/10 text-[#00D7FF] mx-auto flex items-center justify-center font-bold text-2xl border border-[#00D7FF]/30">
+              ▲
+            </div>
+            <h1 className="text-xl font-bold text-white">Ingresar a tu Cuenta</h1>
+            <p className="text-xs text-slate-400">Accedé a tu panel de finanzas y deudas</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="text-xs text-slate-500">Correo Electrónico</label>
+              <label className="text-xs text-slate-400">Correo Electrónico</label>
               <input 
                 type="email" 
                 value={authEmail}
                 onChange={e => setAuthEmail(e.target.value)}
                 placeholder="tu@correo.com" 
-                className="w-full text-xs border border-slate-200 rounded-xl p-3 outline-none focus:border-blue-500"
+                className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl p-3 outline-none text-white focus:border-[#00D7FF]"
                 required 
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500">Contraseña</label>
+              <label className="text-xs text-slate-400">Contraseña</label>
               <input 
                 type="password" 
                 value={authPassword}
                 onChange={e => setAuthPassword(e.target.value)}
                 placeholder="••••••••" 
-                className="w-full text-xs border border-slate-200 rounded-xl p-3 outline-none focus:border-blue-500"
+                className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl p-3 outline-none text-white focus:border-[#00D7FF]"
                 required 
               />
             </div>
 
             {authError && (
-              <p className="text-xs text-red-500 bg-red-50 p-2.5 rounded-lg border border-red-100">{authError}</p>
+              <p className="text-xs text-rose-400 bg-rose-950/40 p-2.5 rounded-lg border border-rose-800">{authError}</p>
             )}
 
             <button 
               type="submit" 
               disabled={authLoading}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
               {authLoading ? 'Iniciando sesión...' : 'Ingresar al Panel'}
@@ -465,15 +695,27 @@ export default function DashboardFinanzas() {
     );
   }
 
+  // ==========================================
+  // RENDER: PANEL OPERATIVO (DASHBOARD)
+  // ==========================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Header con Selector de Mes */}
+        {/* Header con Botón de Retorno a la Landing */}
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
-          <div>
-            <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
-            <p className="text-xs text-slate-500">{user?.email}</p>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setViewMode('landing')}
+              title="Ver portada comercial"
+              className="w-10 h-10 rounded-xl bg-slate-900 text-[#00D7FF] flex items-center justify-center font-bold text-lg hover:opacity-90 transition-opacity cursor-pointer"
+            >
+              ▲
+            </button>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
+              <p className="text-xs text-slate-500">{user?.email}</p>
+            </div>
           </div>
           
           <div className="flex flex-wrap items-center gap-3">
@@ -552,7 +794,7 @@ export default function DashboardFinanzas() {
           </div>
         </div>
 
-        {/* Bloque: Tarjetas de Crédito con opción de Edición */}
+        {/* Bloque: Tarjetas de Crédito */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
@@ -627,7 +869,7 @@ export default function DashboardFinanzas() {
           </div>
         </div>
 
-        {/* Formulario de Carga y Gráfica */}
+        {/* Formulario y Gráfico */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
             <div className="flex bg-slate-100 p-1 rounded-xl">
@@ -763,7 +1005,7 @@ export default function DashboardFinanzas() {
 
           <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
             <div className="flex items-center gap-2 mb-2">
-              <PieIcon className="w-4 h-4 text-blue-600" />
+              <BarChart3 className="w-4 h-4 text-blue-600" />
               <h2 className="text-sm font-bold text-slate-900">
                 Gastos Desglosados por Rubro ({selectedMonth === 'all' ? 'Histórico' : selectedMonth})
               </h2>
@@ -799,7 +1041,7 @@ export default function DashboardFinanzas() {
           </div>
         </div>
 
-        {/* Historial con Fecha de Movimiento y Fecha de Carga */}
+        {/* Historial */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-sm font-bold text-slate-900">
@@ -843,7 +1085,7 @@ export default function DashboardFinanzas() {
 
       </div>
 
-      {/* Modal: Editar Tarjeta Existente */}
+      {/* Modal: Editar Tarjeta */}
       {isEditCardModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">

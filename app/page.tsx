@@ -21,7 +21,7 @@ import {
   LogIn,
   Calendar,
   Clock,
-  AlertCircle
+  Pencil
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -37,7 +37,7 @@ export default function DashboardFinanzas() {
   const [creditCards, setCreditCards] = useState<any[]>([]);
   const [loans, setLoans] = useState<any[]>([]);
 
-  // Filtro de Mes (Formato YYYY-MM o 'all')
+  // Filtro de Mes
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
 
   // Estados de inicio de sesión directo
@@ -46,7 +46,7 @@ export default function DashboardFinanzas() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
 
-  // Formulario manual
+  // Formulario manual de transacciones
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
@@ -59,6 +59,7 @@ export default function DashboardFinanzas() {
   // Modales
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
+  const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
 
   // Estados de Importación
   const [importText, setImportText] = useState('');
@@ -67,11 +68,18 @@ export default function DashboardFinanzas() {
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [migrationData, setMigrationData] = useState<any>(null);
 
-  // Formulario nueva tarjeta
+  // Formulario nueva tarjeta manual
   const [newCardName, setNewCardName] = useState('');
   const [newCardClosing, setNewCardClosing] = useState('20');
   const [newCardDue, setNewCardDue] = useState('5');
   const [newCardLimit, setNewCardLimit] = useState('');
+
+  // Formulario edición de tarjeta existente
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [editCardName, setEditCardName] = useState('');
+  const [editCardClosing, setEditCardClosing] = useState('20');
+  const [editCardDue, setEditCardDue] = useState('5');
+  const [editCardLimit, setEditCardLimit] = useState('');
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
@@ -128,7 +136,6 @@ export default function DashboardFinanzas() {
     const { data: tx } = await supabase.from('transactions').select('*').eq('user_id', userId).order('date', { ascending: false });
     if (tx) {
       setTransactions(tx);
-      // Configurar mes actual por defecto si existen transacciones
       if (tx.length > 0 && selectedMonth === 'all') {
         const latestDate = tx[0].date ? tx[0].date.substring(0, 7) : 'all';
         setSelectedMonth(latestDate);
@@ -189,6 +196,52 @@ export default function DashboardFinanzas() {
       refreshAll(user.id);
     } else {
       alert('Error creando tarjeta: ' + error.message);
+    }
+  }
+
+  // Abrir modal de edición con los datos actuales de la tarjeta
+  function openEditCard(card: any) {
+    setEditingCardId(card.id);
+    setEditCardName(card.name);
+    setEditCardClosing(String(card.closing_day || '20'));
+    setEditCardDue(String(card.due_day || '5'));
+    setEditCardLimit(String(card.credit_limit || '0'));
+    setIsEditCardModalOpen(true);
+  }
+
+  // Guardar modificaciones de la tarjeta en Supabase
+  async function handleUpdateCard(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingCardId || !user) return;
+
+    const { error } = await supabase
+      .from('credit_cards')
+      .update({
+        name: editCardName,
+        closing_day: parseInt(editCardClosing),
+        due_day: parseInt(editCardDue),
+        credit_limit: parseFloat(editCardLimit || '0')
+      })
+      .eq('id', editingCardId);
+
+    if (!error) {
+      setIsEditCardModalOpen(false);
+      setEditingCardId(null);
+      refreshAll(user.id);
+      alert('¡Tarjeta actualizada correctamente!');
+    } else {
+      alert('Error al actualizar tarjeta: ' + error.message);
+    }
+  }
+
+  // Eliminar tarjeta
+  async function handleDeleteCard(cardId: string) {
+    if (!confirm('¿Deseas eliminar esta tarjeta? (No afectará las transacciones ya registradas)')) return;
+    const { error } = await supabase.from('credit_cards').delete().eq('id', cardId);
+    if (!error && user) {
+      refreshAll(user.id);
+    } else if (error) {
+      alert('Error al eliminar tarjeta: ' + error.message);
     }
   }
 
@@ -309,7 +362,6 @@ export default function DashboardFinanzas() {
     }
   }
 
-  // Lista de meses disponibles encontrados en las transacciones
   const availableMonths = useMemo(() => {
     const monthsSet = new Set<string>();
     transactions.forEach(t => {
@@ -320,20 +372,17 @@ export default function DashboardFinanzas() {
     return Array.from(monthsSet).sort().reverse();
   }, [transactions]);
 
-  // Transacciones filtradas por el mes seleccionado
   const filteredTransactions = useMemo(() => {
     if (selectedMonth === 'all') return transactions;
     return transactions.filter(t => t.date && t.date.startsWith(selectedMonth));
   }, [transactions, selectedMonth]);
 
-  // Totales financieros del periodo seleccionado
   const totalIncome = useMemo(() => {
     return filteredTransactions
       .filter(t => t.type === 'income')
       .reduce((acc, t) => acc + Number(t.amount || 0), 0);
   }, [filteredTransactions]);
 
-  // Total gastado excluyendo transferencias internas o pagos repetidos de resúmenes
   const totalExpense = useMemo(() => {
     return filteredTransactions
       .filter(t => t.type === 'expense')
@@ -342,7 +391,6 @@ export default function DashboardFinanzas() {
 
   const netBalance = totalIncome - totalExpense;
 
-  // Deuda total acumulada en tarjetas
   const totalDebt = useMemo(() => {
     return creditCards.reduce((acc, c) => acc + Number(c.credit_limit || 0), 0);
   }, [creditCards]);
@@ -429,7 +477,6 @@ export default function DashboardFinanzas() {
           </div>
           
           <div className="flex flex-wrap items-center gap-3">
-            {/* Selector de Mes */}
             <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
               <Calendar className="w-4 h-4 text-slate-500" />
               <select 
@@ -448,14 +495,14 @@ export default function DashboardFinanzas() {
 
             <button 
               onClick={() => setIsImportModalOpen(true)}
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white text-xs font-semibold px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white text-xs font-semibold px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
             >
               <Sparkles className="w-4 h-4 text-cyan-200" />
               Migrar o Importar con IA
             </button>
             <button 
               onClick={() => supabase.auth.signOut()} 
-              className="text-xs text-red-500 border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition-colors"
+              className="text-xs text-red-500 border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition-colors cursor-pointer"
             >
               Salir
             </button>
@@ -505,7 +552,7 @@ export default function DashboardFinanzas() {
           </div>
         </div>
 
-        {/* Bloque: Tarjetas y Préstamos */}
+        {/* Bloque: Tarjetas de Crédito con opción de Edición */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
@@ -515,7 +562,7 @@ export default function DashboardFinanzas() {
               </div>
               <button 
                 onClick={() => setIsCardModalOpen(true)}
-                className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 font-semibold"
+                className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 font-semibold cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" /> Agregar Tarjeta
               </button>
@@ -525,9 +572,29 @@ export default function DashboardFinanzas() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {creditCards.map(c => (
-                  <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
-                    <p className="text-xs font-bold text-slate-800">{c.name}</p>
-                    <p className="text-[10px] text-slate-500">Cierre: Día {c.closing_day} • Vence: Día {c.due_day}</p>
+                  <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1 relative group">
+                    <div className="flex justify-between items-start">
+                      <p className="text-xs font-bold text-slate-800 pr-12">{c.name}</p>
+                      <div className="flex items-center gap-1">
+                        <button 
+                          onClick={() => openEditCard(c)}
+                          title="Modificar fecha de cierre y vencimiento"
+                          className="p-1 text-slate-400 hover:text-blue-600 hover:bg-white rounded transition-colors cursor-pointer"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteCard(c.id)}
+                          title="Eliminar tarjeta"
+                          className="p-1 text-slate-400 hover:text-red-500 hover:bg-white rounded transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-500">
+                      Cierre: <strong className="text-slate-700">Día {c.closing_day}</strong> • Vence: <strong className="text-slate-700">Día {c.due_day}</strong>
+                    </p>
                     {c.credit_limit > 0 && (
                       <p className="text-[10px] text-rose-600 font-semibold">Saldo Deuda: ${Number(c.credit_limit).toLocaleString('es-AR')}</p>
                     )}
@@ -732,7 +799,7 @@ export default function DashboardFinanzas() {
           </div>
         </div>
 
-        {/* Historial con Fecha del Movimiento y Fecha de Carga al Sistema */}
+        {/* Historial con Fecha de Movimiento y Fecha de Carga */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-sm font-bold text-slate-900">
@@ -775,6 +842,143 @@ export default function DashboardFinanzas() {
         </div>
 
       </div>
+
+      {/* Modal: Editar Tarjeta Existente */}
+      {isEditCardModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-900">Editar Tarjeta de Crédito</h3>
+              <button onClick={() => setIsEditCardModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateCard} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Nombre de la Tarjeta</label>
+                <input 
+                  type="text" 
+                  value={editCardName}
+                  onChange={e => setEditCardName(e.target.value)}
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-500">Día de Cierre</label>
+                  <input 
+                    type="number" 
+                    min="1"
+                    max="31"
+                    value={editCardClosing}
+                    onChange={e => setEditCardClosing(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold text-blue-600"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Día de Vencimiento</label>
+                  <input 
+                    type="number" 
+                    min="1"
+                    max="31"
+                    value={editCardDue}
+                    onChange={e => setEditCardDue(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold text-slate-800"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Saldo Deuda / Límite ($)</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  value={editCardLimit}
+                  onChange={e => setEditCardLimit(e.target.value)}
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                />
+              </div>
+              <button 
+                type="submit" 
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors cursor-pointer"
+              >
+                Guardar Modificaciones
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Crear Tarjeta Manual */}
+      {isCardModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-900">Nueva Tarjeta de Crédito</h3>
+              <button onClick={() => setIsCardModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleCreateCard} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Nombre de la Tarjeta</label>
+                <input 
+                  type="text" 
+                  value={newCardName}
+                  onChange={e => setNewCardName(e.target.value)}
+                  placeholder="Ej: Visa Banco Nación / Master MP" 
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-500">Día de Cierre</label>
+                  <input 
+                    type="number" 
+                    min="1"
+                    max="31"
+                    value={newCardClosing}
+                    onChange={e => setNewCardClosing(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Día de Vencimiento</label>
+                  <input 
+                    type="number" 
+                    min="1"
+                    max="31"
+                    value={newCardDue}
+                    onChange={e => setNewCardDue(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Saldo o Límite ($)</label>
+                <input 
+                  type="number" 
+                  value={newCardLimit}
+                  onChange={e => setNewCardLimit(e.target.value)}
+                  placeholder="0.00" 
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                />
+              </div>
+              <button 
+                type="submit" 
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors cursor-pointer"
+              >
+                Guardar Tarjeta
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Migrar Datos con IA */}
       {isImportModalOpen && (
@@ -830,7 +1034,7 @@ export default function DashboardFinanzas() {
             ) : (
               <div className="flex-1 overflow-y-auto space-y-4">
                 <div className="p-3 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-2 text-xs">
-                  <span className="font-bold text-indigo-900">Entidades que se darán de alta automáticamente:</span>
+                  <span className="font-bold text-indigo-900">Entidades detectadas:</span>
                   <div className="flex flex-wrap gap-2">
                     {migrationData.detected_cards?.map((c: any, i: number) => (
                       <span key={i} className="bg-white px-2.5 py-1 rounded-lg border border-indigo-200 text-indigo-800 font-semibold text-[11px] flex items-center gap-1">
@@ -881,71 +1085,6 @@ export default function DashboardFinanzas() {
                 </button>
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Crear Tarjeta Manual */}
-      {isCardModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-900">Nueva Tarjeta de Crédito</h3>
-              <button onClick={() => setIsCardModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <form onSubmit={handleCreateCard} className="space-y-3">
-              <div>
-                <label className="text-xs text-slate-500">Nombre de la Tarjeta</label>
-                <input 
-                  type="text" 
-                  value={newCardName}
-                  onChange={e => setNewCardName(e.target.value)}
-                  placeholder="Ej: Visa Banco Nación / Master MP" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-slate-500">Día de Cierre</label>
-                  <input 
-                    type="number" 
-                    value={newCardClosing}
-                    onChange={e => setNewCardClosing(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500">Día de Vencimiento</label>
-                  <input 
-                    type="number" 
-                    value={newCardDue}
-                    onChange={e => setNewCardDue(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                    required
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-xs text-slate-500">Saldo o Límite ($)</label>
-                <input 
-                  type="number" 
-                  value={newCardLimit}
-                  onChange={e => setNewCardLimit(e.target.value)}
-                  placeholder="0.00" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                />
-              </div>
-              <button 
-                type="submit" 
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors cursor-pointer"
-              >
-                Guardar Tarjeta
-              </button>
-            </form>
           </div>
         </div>
       )}

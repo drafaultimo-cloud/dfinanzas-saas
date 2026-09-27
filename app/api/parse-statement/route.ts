@@ -55,73 +55,88 @@ Debes identificar y estructurar dos grupos de datos:
       ];
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: contentsPayload,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            detected_cards: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  balance: { type: Type.NUMBER },
-                },
-                required: ['name'],
-              },
-            },
-            detected_wallets: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  balance: { type: Type.NUMBER },
-                },
-                required: ['name'],
-              },
-            },
-            detected_loans: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  entity: { type: Type.STRING },
-                  total_amount: { type: Type.NUMBER },
-                  installment_amount: { type: Type.NUMBER },
-                },
-                required: ['entity'],
-              },
-            },
+    const schemaConfig = {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          detected_cards: {
+            type: Type.ARRAY,
             items: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  date: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  amount: { type: Type.NUMBER },
-                  type: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                  entity_name: { type: Type.STRING },
-                  installment_number: { type: Type.INTEGER },
-                  total_installments: { type: Type.INTEGER },
-                },
-                required: ['description', 'amount', 'type'],
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                balance: { type: Type.NUMBER },
               },
+              required: ['name'],
             },
           },
-          required: ['items'],
+          detected_wallets: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                balance: { type: Type.NUMBER },
+              },
+              required: ['name'],
+            },
+          },
+          detected_loans: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                entity: { type: Type.STRING },
+                total_amount: { type: Type.NUMBER },
+                installment_amount: { type: Type.NUMBER },
+              },
+              required: ['entity'],
+            },
+          },
+          items: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                date: { type: Type.STRING },
+                description: { type: Type.STRING },
+                amount: { type: Type.NUMBER },
+                type: { type: Type.STRING },
+                category: { type: Type.STRING },
+                entity_name: { type: Type.STRING },
+                installment_number: { type: Type.INTEGER },
+                total_installments: { type: Type.INTEGER },
+              },
+              required: ['description', 'amount', 'type'],
+            },
+          },
         },
+        required: ['items'],
       },
-    });
+    };
+
+    let response;
+    try {
+      // Intento principal con modelo flash 2.5
+      response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: contentsPayload,
+        config: schemaConfig,
+      });
+    } catch (primaryErr: any) {
+      console.warn('Fallback activado tras error en modelo primario:', primaryErr.message);
+      // Fallback automático ante saturación (503 / High Demand)
+      response = await ai.models.generateContent({
+        model: 'gemini-2.5-pro',
+        contents: contentsPayload,
+        config: schemaConfig,
+      });
+    }
 
     return NextResponse.json(JSON.parse(response.text || '{}'));
   } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'Error en Gemini' }, { status: 500 });
+    console.error('Error definitivo en endpoint:', error);
+    return NextResponse.json({ error: error.message || 'Error al procesar con IA' }, { status: 500 });
   }
 }

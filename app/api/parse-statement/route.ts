@@ -1,75 +1,39 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
-// Función de reintento automático para mitigar saturación 503
-async function generateWithRetry(payload: any[], retries = 3, delay = 1500): Promise<any> {
-  for (let i = 0; i < retries; i++) {
+// Helper para reintentar con backoff exponencial
+async function callGeminiWithRetry(contents: any[], retries = 3, delay = 2000): Promise<any> {
+  let lastError: any;
+  for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
-        contents: payload,
+        contents,
         config: {
+          temperature: 0.1,
           responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              detected_cards: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    balance: { type: Type.NUMBER },
-                  },
-                  required: ['name'],
-                },
-              },
-              detected_loans: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    entity: { type: Type.STRING },
-                    total_amount: { type: Type.NUMBER },
-                    installment_amount: { type: Type.NUMBER },
-                  },
-                  required: ['entity'],
-                },
-              },
-              items: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    date: { type: Type.STRING },
-                    description: { type: Type.STRING },
-                    amount: { type: Type.NUMBER },
-                    type: { type: Type.STRING },
-                    category: { type: Type.STRING },
-                    installment_number: { type: Type.INTEGER },
-                    total_installments: { type: Type.INTEGER },
-                  },
-                  required: ['description', 'amount', 'type'],
-                },
-              },
-            },
-            required: ['items'],
-          },
         },
       });
       return response;
     } catch (err: any) {
-      const is503 = err?.message?.includes('503') || err?.status === 503 || err?.message?.includes('high demand');
-      if (is503 && i < retries - 1) {
-        console.warn(`Saturación 503 detectada. Reintentando intento ${i + 2} de ${retries} en ${delay}ms...`);
-        await new Promise((res) => setTimeout(res, delay * (i + 1)));
+      lastError = err;
+      const isOverloaded =
+        err?.status === 503 ||
+        err?.message?.includes('503') ||
+        err?.message?.includes('high demand') ||
+        err?.message?.includes('UNAVAILABLE');
+
+      if (isOverloaded && attempt < retries - 1) {
+        console.warn(`[Gemini 503] Reintento ${attempt + 2}/${retries} en ${delay}ms...`);
+        await new Promise((res) => setTimeout(res, delay * (attempt + 1)));
       } else {
         throw err;
       }
     }
   }
+  throw lastError;
 }
 
 export async function POST(req: NextRequest) {
@@ -79,11 +43,29 @@ export async function POST(req: NextRequest) {
 
     const promptInstructions = `
 Extrae la información financiera esencial de este documento o texto.
-Devuelve un JSON con:
-1. detected_cards: tarjetas de crédito (name, balance numérico).
-2. detected_loans: préstamos o deudas (entity, total_amount numérico, installment_amount numérico).
-3. items: cada movimiento individual (description, amount numérico positivo, type ['income' o 'expense'], category, date en YYYY-MM-DD).
-Sé sintético y extrae montos limpios.
+Responde ÚNICAMENTE un objeto JSON válido con esta estructura exacta, sin texto adicional:
+{
+  "detected_cards": [
+    { "name": "Nombre de la tarjeta", "balance": 0.0 }
+  ],
+  "detected_loans": [
+    { "entity": "Nombre del préstamo o banco", "total_amount": 0.0, "installment_amount": 0.0 }
+  ],
+  "items": [
+    {
+      "date": "YYYY-MM-DD",
+      "description": "Detalle del consumo o ingreso",
+      "amount": 0.0,
+      "type": "income o expense",
+      "category": "Supermercado, Servicios, Alimentos, Transporte, Tarjeta de Crédito, Préstamos u Otros",
+      "installment_number": 1,
+      "total_installments": 1
+    }
+  ]
+}
+Reglas:
+- Los montos deben ser números flotantes limpios (positivos, sin signos ni comas de miles).
+- Si no figura fecha exacta, utiliza la fecha actual.
 `;
 
     if (contentType.includes('application/json')) {
@@ -113,10 +95,22 @@ Sé sintético y extrae montos limpios.
       ];
     }
 
-    const response = await generateWithRetry(contentsPayload);
-    return NextResponse.json(JSON.parse(response.text || '{}'));
+    const response = await callGeminiWithRetry(contentsPayload);
+    const textOutput = response.text || '{}';
+
+    // Limpieza de posibles bloques markdown que devuelva el modelo
+    const cleanedJson = textOutput
+      .replace(/```json/g, '')
+      .replace(/```/g, '')
+      .trim();
+
+    const parsedData = JSON.parse(cleanedJson);
+    return NextResponse.json(parsedData);
   } catch (error: any) {
-    console.error('Error final en endpoint parse-statement:', error);
-    return NextResponse.json({ error: error.message || 'Error procesando datos' }, { status: 500 });
+    console.error('Error procesando en parse-statement:', error);
+    return NextResponse.json(
+      { error: error?.message || 'Error al procesar el archivo con IA' },
+      { status: 500 }
+    );
   }
 }

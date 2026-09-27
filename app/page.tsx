@@ -30,7 +30,8 @@ import {
   Send,
   FileCheck,
   AlertTriangle,
-  Lock
+  Lock,
+  Gift
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -38,14 +39,13 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ff4d4f', '#13c2c2', '#faad14'];
-
-// Tu correo para habilitar la vista de Auditoría y Verificación de Cobros
 const ADMIN_EMAIL = 'drafaultimo@gmail.com';
+const TRIAL_DAYS = 10;
 
 export default function FinanzasDRMIA() {
   const [viewMode, setViewMode] = useState<'landing' | 'app'>('landing');
 
-  // Autenticación & Registro
+  // Autenticación
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -55,14 +55,19 @@ export default function FinanzasDRMIA() {
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
 
-  // Estado de Suscripción / Pagos
-  const [hasActivePlan, setHasActivePlan] = useState<boolean>(true);
+  // Estado del período de prueba y suscripción
+  const [isTrialActive, setIsTrialActive] = useState<boolean>(true);
+  const [trialDaysLeft, setTrialDaysLeft] = useState<number>(TRIAL_DAYS);
+  const [hasPaidPlan, setHasPaidPlan] = useState<boolean>(false);
+  const [selectedPlanToPay, setSelectedPlanToPay] = useState<'base' | 'pro'>('pro');
+
+  // Comprobantes
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const [receiptFeedback, setReceiptFeedback] = useState<any>(null);
   const [adminReceipts, setAdminReceipts] = useState<any[]>([]);
 
-  // Datos financieros del panel
+  // Datos financieros
   const [transactions, setTransactions] = useState<any[]>([]);
   const [creditCards, setCreditCards] = useState<any[]>([]);
   const [loans, setLoans] = useState<any[]>([]);
@@ -91,7 +96,7 @@ export default function FinanzasDRMIA() {
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [migrationData, setMigrationData] = useState<any>(null);
 
-  // Formulario nueva tarjeta
+  // Formulario tarjeta nueva
   const [newCardName, setNewCardName] = useState('');
   const [newCardClosing, setNewCardClosing] = useState('20');
   const [newCardDue, setNewCardDue] = useState('5');
@@ -108,7 +113,7 @@ export default function FinanzasDRMIA() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         setUser(session.user);
-        await checkSubscriptionAndLoad(session.user);
+        await evaluateAccessAndLoad(session.user);
       } else {
         setUser(null);
       }
@@ -127,7 +132,7 @@ export default function FinanzasDRMIA() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         setUser(session.user);
-        await checkSubscriptionAndLoad(session.user);
+        await evaluateAccessAndLoad(session.user);
       }
     } catch (err) {
       console.error(err);
@@ -136,30 +141,51 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  async function checkSubscriptionAndLoad(currentUser: any) {
+  // Evaluación del período de 10 días gratis vs. plan pagado
+  async function evaluateAccessAndLoad(currentUser: any) {
     if (currentUser.email === ADMIN_EMAIL) {
-      setHasActivePlan(true);
+      setIsTrialActive(true);
+      setHasPaidPlan(true);
       await loadAdminReceipts();
-    } else {
-      // Verificar si tiene un comprobante aprobado o verificado
-      const { data: receipts } = await supabase
-        .from('payment_receipts')
-        .select('*')
-        .eq('user_id', currentUser.id)
-        .order('created_at', { ascending: false })
-        .limit(1);
+      await refreshAll(currentUser.id);
+      return;
+    }
 
-      if (receipts && receipts.length > 0) {
-        const lastReceipt = receipts[0];
-        setReceiptFeedback(lastReceipt);
-        if (lastReceipt.ai_status === 'approved_by_ai' || lastReceipt.admin_status === 'verified') {
-          setHasActivePlan(true);
-        } else {
-          setHasActivePlan(false);
-        }
-      } else {
-        setHasActivePlan(false);
-      }
+    // 1. Cálculo de días desde el registro
+    const createdAt = new Date(currentUser.created_at || new Date().toISOString());
+    const now = new Date();
+    const diffTime = Math.abs(now.getTime() - createdAt.getTime());
+    const daysSinceRegistration = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    const remainingDays = Math.max(0, TRIAL_DAYS - daysSinceRegistration);
+
+    setTrialDaysLeft(remainingDays);
+
+    // 2. Consulta si ya abonó un plan formal
+    const { data: receipts } = await supabase
+      .from('payment_receipts')
+      .select('*')
+      .eq('user_id', currentUser.id)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    const hasVerifiedPayment = receipts && receipts.length > 0 && 
+      (receipts[0].ai_status === 'approved_by_ai' || receipts[0].admin_status === 'verified');
+
+    if (hasVerifiedPayment) {
+      setHasPaidPlan(true);
+      setIsTrialActive(false);
+    } else if (remainingDays > 0) {
+      // Período de 10 días gratis activo
+      setIsTrialActive(true);
+      setHasPaidPlan(false);
+    } else {
+      // Expiraron los 10 días (Día 11+)
+      setIsTrialActive(false);
+      setHasPaidPlan(false);
+    }
+
+    if (receipts && receipts.length > 0) {
+      setReceiptFeedback(receipts[0]);
     }
 
     await refreshAll(currentUser.id);
@@ -188,17 +214,16 @@ export default function FinanzasDRMIA() {
         if (error) throw error;
         if (data?.user) {
           setUser(data.user);
-          await checkSubscriptionAndLoad(data.user);
+          await evaluateAccessAndLoad(data.user);
           setViewMode('app');
         }
       } else {
-        // Registro Abierto
         const { data, error } = await supabase.auth.signUp({
           email: authEmail,
           password: authPassword,
         });
         if (error) throw error;
-        setAuthSuccess('¡Cuenta creada con éxito! Ya puedes iniciar sesión para comenzar.');
+        setAuthSuccess('¡Cuenta creada exitosamente! Tenés 10 días gratis para probar todos los servicios.');
         setAuthMode('login');
       }
     } catch (err: any) {
@@ -208,7 +233,6 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  // Enviar Comprobante al Chat de Validación IA
   async function handleUploadReceipt(e: React.FormEvent) {
     e.preventDefault();
     if (!receiptFile || !user) return;
@@ -225,18 +249,17 @@ export default function FinanzasDRMIA() {
 
       const isApproved = analysis.is_valid_transfer === true;
 
-      // Registrar comprobante y veredicto en Supabase
       const { data: inserted, error: insertError } = await supabase
         .from('payment_receipts')
         .insert([{
           user_id: user.id,
           user_email: user.email,
-          amount: analysis.amount || 0,
+          amount: analysis.amount || (selectedPlanToPay === 'pro' ? 24500 : 12000),
           transfer_date: analysis.transfer_date || new Date().toISOString().split('T')[0],
           sender_name: analysis.sender_name || 'No determinado',
           alias_destination: analysis.destination || 'drm-ia',
           ai_status: isApproved ? 'approved_by_ai' : 'rejected_by_ai',
-          ai_notes: analysis.reason || 'Sin observaciones',
+          ai_notes: `Plan solicitado: ${selectedPlanToPay.toUpperCase()}. Veredicto: ${analysis.reason || 'Sin detalles'}`,
           admin_status: 'pending'
         }])
         .select()
@@ -246,10 +269,10 @@ export default function FinanzasDRMIA() {
 
       setReceiptFeedback(inserted);
       if (isApproved) {
-        setHasActivePlan(true);
-        alert('¡Comprobante verificado con éxito por IA! Tu cuenta fue habilitada y notificada a Dionicio para auditoría.');
+        setHasPaidPlan(true);
+        alert('¡Comprobante aprobado con éxito por IA! Tu plan ha quedado activado.');
       } else {
-        alert('Aviso de la IA: ' + (analysis.reason || 'No se pudo validar el comprobante. Será auditado manualmente.'));
+        alert('Comprobante recibido. La IA lo derivó a revisión para que Dionicio lo active manualmente.');
       }
     } catch (err: any) {
       alert('Error al enviar comprobante: ' + err.message);
@@ -259,7 +282,6 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  // Acción de Administrador: Confirmar verificación definitiva
   async function handleVerifyByAdmin(receiptId: string, status: 'verified' | 'rejected') {
     const { error } = await supabase
       .from('payment_receipts')
@@ -268,7 +290,7 @@ export default function FinanzasDRMIA() {
 
     if (!error) {
       await loadAdminReceipts();
-      alert(`Comprobante marcado como: ${status === 'verified' ? 'Aprobado y Verificado' : 'Rechazado'}`);
+      alert(`Comprobante marcado como: ${status === 'verified' ? 'Verificado' : 'Rechazado'}`);
     }
   }
 
@@ -544,12 +566,11 @@ export default function FinanzasDRMIA() {
   }, [filteredTransactions]);
 
   // ==========================================
-  // RENDER: LANDING PAGE DE VENTA (ESTÉTICA DRMIA)
+  // RENDER: LANDING COMERCIAL DRMIA (10 DÍAS GRATIS)
   // ==========================================
   if (viewMode === 'landing') {
     return (
       <div className="min-h-screen bg-[#08121f] text-slate-100 font-sans selection:bg-[#00D7FF] selection:text-[#0B192C]">
-        {/* Barra de Navegación DRMIA */}
         <nav className="max-w-6xl mx-auto px-6 py-6 flex justify-between items-center border-b border-slate-800/80">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 border border-[#00D7FF]/30 flex items-center justify-center text-[#00D7FF] font-bold text-xl shadow-[0_0_15px_rgba(0,215,255,0.2)]">
@@ -574,16 +595,15 @@ export default function FinanzasDRMIA() {
               onClick={() => { setAuthMode('register'); setViewMode('app'); }}
               className="text-xs font-semibold bg-[#00D7FF] text-[#0B192C] px-4 py-2.5 rounded-xl hover:bg-[#00B4D8] transition-all shadow-lg shadow-[#00D7FF]/10 flex items-center gap-1.5 cursor-pointer font-bold"
             >
-              Crear Cuenta Gratis <ArrowRight className="w-3.5 h-3.5" />
+              Probar 10 Días Gratis <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
         </nav>
 
-        {/* Hero Section */}
         <header className="max-w-4xl mx-auto px-6 pt-16 pb-14 text-center space-y-6">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0B192C] border border-[#00D7FF]/30 text-[#00D7FF] text-xs font-semibold shadow-sm">
-            <Sparkles className="w-3.5 h-3.5 text-[#00D7FF]" />
-            Potenciado con Google Gemini 3.8 Flash
+            <Gift className="w-3.5 h-3.5 text-[#00D7FF]" />
+            10 Días de Prueba Completa sin Cargo • Sin Tarjeta
           </div>
 
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-tight">
@@ -591,7 +611,7 @@ export default function FinanzasDRMIA() {
           </h1>
 
           <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto font-normal leading-relaxed">
-            Olvidate de cargar gastos uno por uno en Excel. Subí tu resumen bancario o planilla y nuestra IA organiza tus consumos, detecta tus tarjetas y calcula tu balance real en 5 segundos.
+            Subí tus resúmenes o planillas y probá gratis todas las funciones durante 10 días. El día 11 elegís si continuás con el Plan Esencial o el Plan Pro IA.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
@@ -599,7 +619,7 @@ export default function FinanzasDRMIA() {
               onClick={() => { setAuthMode('register'); setViewMode('app'); }}
               className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-sm hover:opacity-95 transition-all shadow-xl shadow-[#00D7FF]/20 flex items-center justify-center gap-2 cursor-pointer"
             >
-              Crear Cuenta y Empezar <ArrowRight className="w-4 h-4" />
+              Comenzar Prueba de 10 Días <ArrowRight className="w-4 h-4" />
             </button>
             <a 
               href="https://wa.me/5492966000000?text=Hola%20DRMIA,%20quiero%20conocer%20mas%20sobre%20el%20sistema%20de%20finanzas" 
@@ -618,48 +638,81 @@ export default function FinanzasDRMIA() {
             <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
               <Zap className="w-6 h-6 text-[#00D7FF]" />
               <h3 className="text-base font-bold text-white">Importador Inteligente IA</h3>
-              <p className="text-xs text-slate-400">Gemini 3.8 Flash lee resúmenes y extrae deudas, cuotas y consumos.</p>
+              <p className="text-xs text-slate-400">Gemini 3.8 Flash interpreta extractos bancarios en PDF y Google Sheets al instante.</p>
             </div>
             <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
               <CreditCard className="w-6 h-6 text-[#00D7FF]" />
-              <h3 className="text-base font-bold text-white">Tarjetas con Fechas Reales</h3>
-              <p className="text-xs text-slate-400">Configura el cierre y vencimiento exacto de cada banco sin confusiones.</p>
+              <h3 className="text-base font-bold text-white">Cierres y Vencimientos Reales</h3>
+              <p className="text-xs text-slate-400">Configurá las fechas exactas de cada entidad (BNA, Naranja X, Mercado Pago) y evitá sorpresas.</p>
             </div>
             <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
               <BarChart3 className="w-6 h-6 text-[#00D7FF]" />
-              <h3 className="text-base font-bold text-white">Flujo Mensual Sin Duplicados</h3>
-              <p className="text-xs text-slate-400">Filtra mes a mes evitando que los pagos de resúmenes falseen tu saldo real.</p>
+              <h3 className="text-base font-bold text-white">Control de Deuda y Flujo</h3>
+              <p className="text-xs text-slate-400">Filtrado mensual para evitar dobles cómputos y evaluar tu posición patrimonial real.</p>
             </div>
           </div>
         </section>
 
-        {/* Planes */}
+        {/* Tabla de Planes al Día 11 */}
         <section className="max-w-5xl mx-auto px-6 py-16 border-t border-slate-800/80">
           <div className="text-center max-w-xl mx-auto mb-12 space-y-2">
-            <h2 className="text-2xl font-bold text-white">Suscripción Simple por Transferencia</h2>
-            <p className="text-xs text-slate-400">Aboná con transferencia directa al alias oficial de DRMIA.</p>
+            <h2 className="text-2xl md:text-3xl font-bold text-white">Probá todo 10 días. Decidí el día 11.</h2>
+            <p className="text-xs text-slate-400">Acceso total durante la prueba. Luego abonás por transferencia simple al alias <strong className="text-[#00D7FF]">drm-ia</strong>.</p>
           </div>
 
-          <div className="max-w-md mx-auto bg-[#132238] p-8 rounded-3xl border-2 border-[#00D7FF] space-y-6 relative shadow-2xl">
-            <div className="text-center space-y-2">
-              <span className="text-xs font-bold text-[#00D7FF] uppercase tracking-wider">Plan Completo con IA</span>
-              <div className="text-3xl font-extrabold text-white">$ 15.000 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
-              <p className="text-xs text-slate-300">Alias de pago: <strong className="text-[#00D7FF] font-mono">drm-ia</strong></p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+            {/* Plan Esencial */}
+            <div className="bg-[#0B192C] p-8 rounded-3xl border border-slate-800 space-y-6 flex flex-col justify-between">
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold text-white">Plan Esencial</h3>
+                <p className="text-xs text-slate-400">Para control de gastos diarios y seguimiento personal estructurado.</p>
+                <div className="text-3xl font-extrabold text-white">$ 12.000 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
+                
+                <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga manual ilimitada de ingresos y gastos</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Hasta 3 tarjetas de crédito con alertas de corte</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Gráfico mensual de gastos desglosados</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Auditoría de fechas de movimiento vs. carga</li>
+                </ul>
+              </div>
+
+              <button 
+                onClick={() => { setAuthMode('register'); setViewMode('app'); }}
+                className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Probar 10 Días Gratis
+              </button>
             </div>
 
-            <ul className="space-y-2.5 text-xs text-slate-300">
-              <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador ilimitado con Gemini 3.8 Flash</li>
-              <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Control de tarjetas y deudas sin límite</li>
-              <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Validación automática del comprobante por IA</li>
-              <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte directo por WhatsApp con Dionicio</li>
-            </ul>
+            {/* Plan Pro IA */}
+            <div className="bg-[#132238] p-8 rounded-3xl border-2 border-[#00D7FF] space-y-6 flex flex-col justify-between relative shadow-2xl">
+              <div className="absolute -top-3.5 right-6 bg-[#00D7FF] text-[#0B192C] text-[10px] font-extrabold uppercase px-3 py-1 rounded-full tracking-wider">
+                Recomendado
+              </div>
 
-            <button 
-              onClick={() => { setAuthMode('register'); setViewMode('app'); }}
-              className="w-full py-3.5 rounded-xl bg-[#00D7FF] text-[#0B192C] font-bold text-xs hover:bg-[#00B4D8] transition-all cursor-pointer"
-            >
-              Registrarme y Activar
-            </button>
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  Plan Pro IA <Sparkles className="w-4 h-4 text-[#00D7FF]" />
+                </h3>
+                <p className="text-xs text-slate-400">Automatización completa para comercios, profesionales y autónomos.</p>
+                <div className="text-3xl font-extrabold text-white">$ 24.500 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
+                
+                <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Todo lo incluido en el Plan Esencial</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importaciones masivas ilimitadas con Gemini 3.8 Flash</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Detección automática de deudas, cuotas y resúmenes</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Tarjetas y préstamos ilimitados</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte prioritario vía WhatsApp con Dionicio</li>
+                </ul>
+              </div>
+
+              <button 
+                onClick={() => { setAuthMode('register'); setViewMode('app'); }}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-xs hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-[#00D7FF]/20"
+              >
+                Probar 10 Días Gratis
+              </button>
+            </div>
           </div>
         </section>
 
@@ -689,14 +742,13 @@ export default function FinanzasDRMIA() {
 
           <div className="text-center space-y-1">
             <h1 className="text-xl font-bold text-white">
-              {authMode === 'login' ? 'Ingresar a tu Cuenta' : 'Crear tu Cuenta en DRMIA'}
+              {authMode === 'login' ? 'Ingresar a tu Cuenta' : 'Empezá tus 10 Días Gratis'}
             </h1>
             <p className="text-xs text-slate-400">
-              {authMode === 'login' ? 'Accedé a tu panel de finanzas y deudas' : 'Registrate gratis en 10 segundos'}
+              {authMode === 'login' ? 'Accedé a tu panel de finanzas' : 'Acceso completo e ilimitado por 10 días'}
             </p>
           </div>
 
-          {/* Toggle entre Iniciar Sesión y Registro */}
           <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
             <button
               onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }}
@@ -708,7 +760,7 @@ export default function FinanzasDRMIA() {
               onClick={() => { setAuthMode('register'); setAuthError(''); setAuthSuccess(''); }}
               className={`flex-1 py-2 rounded-lg font-semibold transition-all ${authMode === 'register' ? 'bg-[#00D7FF] text-[#0B192C]' : 'text-slate-400'}`}
             >
-              Crear Cuenta
+              Crear Cuenta (10 Días Gratis)
             </button>
           </div>
 
@@ -750,7 +802,7 @@ export default function FinanzasDRMIA() {
               className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : authMode === 'login' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
-              {authLoading ? 'Procesando...' : authMode === 'login' ? 'Entrar al Panel' : 'Registrarme Gratis'}
+              {authLoading ? 'Procesando...' : authMode === 'login' ? 'Entrar al Panel' : 'Activar mis 10 Días Gratis'}
             </button>
           </form>
         </div>
@@ -759,38 +811,70 @@ export default function FinanzasDRMIA() {
   }
 
   // ==========================================
-  // RENDER: PANTALLA DE PAGO / ACTIVACIÓN POR TRANSFERENCIA (CHAT IA)
+  // RENDER: PANTALLA DE PAGO BLOQUEANTE (DÍA 11 EN ADELANTE)
   // ==========================================
-  if (user && !hasActivePlan) {
+  if (user && !isTrialActive && !hasPaidPlan) {
     return (
       <div className="min-h-screen bg-[#08121f] text-slate-100 flex items-center justify-center p-4 font-sans">
-        <div className="bg-[#0B192C] max-w-lg w-full p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-6">
+        <div className="bg-[#0B192C] max-w-xl w-full p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-6">
           <div className="flex justify-between items-center border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2">
               <Lock className="w-5 h-5 text-[#00D7FF]" />
-              <h2 className="text-base font-bold text-white">Activar tu Suscripción SaaS</h2>
+              <h2 className="text-base font-bold text-white">Completaste tus 10 días gratis</h2>
             </div>
-            <button onClick={() => supabase.auth.signOut()} className="text-xs text-red-400 hover:underline">
+            <button onClick={() => supabase.auth.signOut()} className="text-xs text-rose-400 hover:underline">
               Cerrar Sesión
             </button>
           </div>
 
+          <p className="text-xs text-slate-300">
+            Tu período de prueba sin cargo finalizó. Para continuar utilizando tu panel con todos tus datos preservados, elegí tu plan y realizá la transferencia:
+          </p>
+
+          {/* Selector de Plan a Pagar */}
+          <div className="grid grid-cols-2 gap-3">
+            <div 
+              onClick={() => setSelectedPlanToPay('base')}
+              className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedPlanToPay === 'base' ? 'bg-[#132238] border-[#00D7FF] shadow-lg shadow-[#00D7FF]/10' : 'bg-slate-900 border-slate-800 opacity-60'}`}
+            >
+              <p className="text-xs font-bold text-white">Plan Esencial</p>
+              <p className="text-lg font-extrabold text-white mt-1">$ 12.000 <span className="text-[10px] font-normal text-slate-400">/ mes</span></p>
+              <p className="text-[10px] text-slate-400 mt-2">Carga manual y tarjetas</p>
+            </div>
+
+            <div 
+              onClick={() => setSelectedPlanToPay('pro')}
+              className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedPlanToPay === 'pro' ? 'bg-[#132238] border-[#00D7FF] shadow-lg shadow-[#00D7FF]/10' : 'bg-slate-900 border-slate-800 opacity-60'}`}
+            >
+              <div className="flex justify-between items-center">
+                <p className="text-xs font-bold text-white">Plan Pro IA</p>
+                <Sparkles className="w-3.5 h-3.5 text-[#00D7FF]" />
+              </div>
+              <p className="text-lg font-extrabold text-white mt-1">$ 24.500 <span className="text-[10px] font-normal text-slate-400">/ mes</span></p>
+              <p className="text-[10px] text-slate-400 mt-2">Importador Gemini y análisis ilimitado</p>
+            </div>
+          </div>
+
+          {/* Datos de Transferencia */}
           <div className="p-4 bg-[#132238] rounded-2xl border border-slate-700/80 space-y-2 text-xs">
             <span className="font-bold text-white flex items-center gap-1.5">
-              <Landmark className="w-4 h-4 text-[#00D7FF]" /> Datos para Transferencia Bancaria
+              <Landmark className="w-4 h-4 text-[#00D7FF]" /> Datos Bancarios para Transferencia
             </span>
             <p className="text-slate-300">Alias Oficial: <strong className="text-[#00D7FF] font-mono text-sm">drm-ia</strong></p>
             <p className="text-slate-400">Titular: DRMIA • Dionicio Rafael Martin</p>
-            <p className="text-slate-400">Valor de la suscripción: <strong>$15.000 / mes</strong></p>
+            <p className="text-slate-300">
+              Monto a transferir: <strong className="text-white text-sm">${selectedPlanToPay === 'pro' ? '24.500' : '12.000'}</strong>
+            </p>
           </div>
 
+          {/* Chat de Validación IA */}
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-[#00D7FF]" />
-              <h3 className="text-xs font-bold text-white">Chat Interno de Verificación con IA</h3>
+              <h3 className="text-xs font-bold text-white">Chat de Validación con IA</h3>
             </div>
             <p className="text-xs text-slate-400">
-              Adjuntá la captura o PDF de tu comprobante. Nuestro auditor IA lo interpretará en segundos para habilitar tu cuenta al instante y dejar la alerta de control a Dionicio.
+              Adjuntá el comprobante de transferencia al alias <strong className="text-white">drm-ia</strong>. La IA lo audita en segundos para reactivar tu cuenta.
             </p>
 
             <form onSubmit={handleUploadReceipt} className="space-y-3">
@@ -805,7 +889,7 @@ export default function FinanzasDRMIA() {
                 <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-1.5">
                   <UploadCloud className="w-8 h-8 text-[#00D7FF]" />
                   <span className="text-xs font-semibold text-slate-300">
-                    {receiptFile ? `Archivo: ${receiptFile.name}` : 'Seleccionar captura del comprobante'}
+                    {receiptFile ? `Archivo: ${receiptFile.name}` : 'Subir captura o PDF del comprobante'}
                   </span>
                   <span className="text-[10px] text-slate-500">Formatos JPG, PNG o PDF</span>
                 </label>
@@ -825,7 +909,7 @@ export default function FinanzasDRMIA() {
               <div className={`p-3 rounded-xl border text-xs space-y-1 ${receiptFeedback.ai_status === 'approved_by_ai' ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300' : 'bg-amber-950/40 border-amber-500/50 text-amber-300'}`}>
                 <p className="font-bold flex items-center gap-1">
                   {receiptFeedback.ai_status === 'approved_by_ai' ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
-                  Estado IA: {receiptFeedback.ai_status === 'approved_by_ai' ? 'Comprobante Aprobado' : 'En Revisión'}
+                  Estado IA: {receiptFeedback.ai_status === 'approved_by_ai' ? 'Comprobante Aprobado' : 'En Auditoría'}
                 </p>
                 <p className="text-[11px] text-slate-300">{receiptFeedback.ai_notes}</p>
               </div>
@@ -837,13 +921,13 @@ export default function FinanzasDRMIA() {
   }
 
   // ==========================================
-  // RENDER: PANEL PRINCIPAL (DASHBOARD)
+  // RENDER: PANEL OPERATIVO (DASHBOARD)
   // ==========================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Header con Control Admin y Selector */}
+        {/* Header con Indicador de Prueba de 10 Días */}
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
           <div className="flex items-center gap-3">
             <button 
@@ -854,18 +938,29 @@ export default function FinanzasDRMIA() {
               ▲
             </button>
             <div>
-              <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
-              <p className="text-xs text-slate-500 flex items-center gap-2">
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
+                {isTrialActive && !hasPaidPlan && (
+                  <span className="bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1">
+                    <Gift className="w-3 h-3 text-amber-600" /> Prueba Gratis: {trialDaysLeft} días restantes
+                  </span>
+                )}
+                {hasPaidPlan && (
+                  <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
+                    Plan Activo
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
                 {user?.email}
                 {user?.email === ADMIN_EMAIL && (
-                  <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-[10px] font-bold">ADMIN</span>
+                  <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-[10px] font-bold">ADMINISTRADOR</span>
                 )}
               </p>
             </div>
           </div>
           
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Botón especial para el Admin para auditar comprobantes recibidos */}
             {user?.email === ADMIN_EMAIL && (
               <button 
                 onClick={() => setIsAdminPanelOpen(true)}
@@ -1241,14 +1336,14 @@ export default function FinanzasDRMIA() {
 
       </div>
 
-      {/* Modal: Panel Maestro de Auditoría de Comprobantes (Solo Admin) */}
+      {/* Modal: Panel Maestro de Auditoría (Admin) */}
       {isAdminPanelOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-4xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <FileCheck className="w-5 h-5 text-purple-600" />
-                <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos y Comprobantes Recibidos</h3>
+                <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos y Comprobantes</h3>
               </div>
               <button onClick={() => setIsAdminPanelOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
@@ -1274,7 +1369,7 @@ export default function FinanzasDRMIA() {
                       <p className="text-xs text-slate-600">
                         Monto: <strong>${Number(r.amount).toLocaleString('es-AR')}</strong> • Fecha: {r.transfer_date} • Pagador: {r.sender_name}
                       </p>
-                      <p className="text-[11px] text-slate-400">Veredicto IA: {r.ai_notes}</p>
+                      <p className="text-[11px] text-slate-400">{r.ai_notes}</p>
                     </div>
 
                     <div className="flex items-center gap-2">

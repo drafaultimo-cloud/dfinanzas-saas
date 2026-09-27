@@ -1,7 +1,8 @@
 ﻿'use client';
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabaseClient'; // Ajusta la ruta a tu cliente si difiere
+import supabaseClientModule from '@/lib/supabaseClient';
+const supabase = (supabaseClientModule as any)?.supabase || supabaseClientModule;
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { 
   ArrowUpCircle, 

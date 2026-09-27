@@ -32,7 +32,7 @@ export default function DashboardFinanzas() {
   const [creditCards, setCreditCards] = useState<any[]>([]);
   const [loans, setLoans] = useState<any[]>([]);
 
-  // Estados del Formulario Manual
+  // Formulario manual
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
@@ -42,17 +42,16 @@ export default function DashboardFinanzas() {
   const [selectedLoanId, setSelectedLoanId] = useState<string>('');
 
   // Modales
-  const [isStatementModalOpen, setIsStatementModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
 
-  // Estados de IA / Importación
+  // Estados de Importación y Migración
   const [importText, setImportText] = useState('');
-  const [uploadingFile, setUploadingFile] = useState(false);
-  const [parsedItems, setParsedItems] = useState<any[]>([]);
-  const [statementSummary, setStatementSummary] = useState<any>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [migrationData, setMigrationData] = useState<any>(null);
 
-  // Formulario nueva tarjeta
+  // Formulario nueva tarjeta manual
   const [newCardName, setNewCardName] = useState('');
   const [newCardClosing, setNewCardClosing] = useState('20');
   const [newCardDue, setNewCardDue] = useState('5');
@@ -67,9 +66,7 @@ export default function DashboardFinanzas() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         setUser(session.user);
-        loadTransactions(session.user.id);
-        loadCards(session.user.id);
-        loadLoans(session.user.id);
+        refreshAll(session.user.id);
       }
     } catch (err) {
       console.error(err);
@@ -78,23 +75,15 @@ export default function DashboardFinanzas() {
     }
   }
 
-  async function loadTransactions(userId: string) {
-    const { data } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('user_id', userId)
-      .order('date', { ascending: false });
-    if (data) setTransactions(data);
-  }
+  async function refreshAll(userId: string) {
+    const { data: tx } = await supabase.from('transactions').select('*').eq('user_id', userId).order('date', { ascending: false });
+    if (tx) setTransactions(tx);
 
-  async function loadCards(userId: string) {
-    const { data } = await supabase.from('credit_cards').select('*').eq('user_id', userId);
-    if (data) setCreditCards(data);
-  }
+    const { data: cards } = await supabase.from('credit_cards').select('*').eq('user_id', userId);
+    if (cards) setCreditCards(cards);
 
-  async function loadLoans(userId: string) {
-    const { data } = await supabase.from('loans').select('*').eq('user_id', userId);
-    if (data) setLoans(data);
+    const { data: ln } = await supabase.from('loans').select('*').eq('user_id', userId);
+    if (ln) setLoans(ln);
   }
 
   async function handleAddTransaction(e: React.FormEvent) {
@@ -119,7 +108,7 @@ export default function DashboardFinanzas() {
       setDescription('');
       setSelectedCardId('');
       setSelectedLoanId('');
-      loadTransactions(user.id);
+      refreshAll(user.id);
     } else {
       alert('Error guardando transacción: ' + error.message);
     }
@@ -141,7 +130,7 @@ export default function DashboardFinanzas() {
       setNewCardName('');
       setNewCardLimit('');
       setIsCardModalOpen(false);
-      loadCards(user.id);
+      refreshAll(user.id);
     } else {
       alert('Error creando tarjeta: ' + error.message);
     }
@@ -149,56 +138,92 @@ export default function DashboardFinanzas() {
 
   async function handleDelete(id: string) {
     const { error } = await supabase.from('transactions').delete().eq('id', id);
-    if (!error && user) loadTransactions(user.id);
+    if (!error && user) refreshAll(user.id);
   }
 
-  // Parsear texto o planilla pegada por un usuario nuevo
-  async function handleImportWithAI() {
-    if (!importText.trim()) return;
-    setUploadingFile(true);
+  // Procesar archivo (PDF / Imagen) o Texto copiado
+  async function handleExecuteAIImport() {
+    if (!importText.trim() && !importFile) return;
+    setUploading(true);
 
     try {
-      const res = await fetch('/api/parse-statement', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ raw_text: importText }),
-      });
+      let res;
+      if (importFile) {
+        const formData = new FormData();
+        formData.append('file', importFile);
+        res = await fetch('/api/parse-statement', { method: 'POST', body: formData });
+      } else {
+        res = await fetch('/api/parse-statement', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ raw_text: importText }),
+        });
+      }
+
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error procesando texto');
-      setParsedItems(data.items || []);
+      if (!res.ok) throw new Error(data.error || 'Error procesando datos con IA');
+      setMigrationData(data);
     } catch (err: any) {
       alert('Error al interpretar datos: ' + err.message);
     } finally {
-      setUploadingFile(false);
+      setUploading(false);
     }
   }
 
-  // Confirmar inserción en bloque
-  async function handleConfirmBatch() {
-    if (!user || parsedItems.length === 0) return;
+  // Confirmar y Guardar Entidades + Movimientos de forma automática
+  async function handleConfirmMigration() {
+    if (!user || !migrationData) return;
 
-    const rows = parsedItems.map(item => ({
-      user_id: user.id,
-      description: item.description,
-      amount: Number(item.amount),
-      category: item.category || 'Otros',
-      type: item.type || 'expense',
-      date: item.date || new Date().toISOString().split('T')[0],
-      installment_number: item.installment_number || 1,
-      total_installments: item.total_installments || 1,
-      credit_card_id: selectedCardId || null
-    }));
+    try {
+      // 1. Crear Tarjetas detectadas si no existen
+      if (migrationData.detected_cards?.length > 0) {
+        const newCards = migrationData.detected_cards.map((c: any) => ({
+          user_id: user.id,
+          name: c.name,
+          closing_day: 20,
+          due_day: 5,
+          credit_limit: Number(c.balance || 0)
+        }));
+        await supabase.from('credit_cards').insert(newCards);
+      }
 
-    const { error } = await supabase.from('transactions').insert(rows);
-    if (!error) {
-      setIsStatementModalOpen(false);
+      // 2. Crear Préstamos detectados si no existen
+      if (migrationData.detected_loans?.length > 0) {
+        const newLoans = migrationData.detected_loans.map((l: any) => ({
+          user_id: user.id,
+          entity: l.entity,
+          total_amount: Number(l.total_amount || 0),
+          installment_amount: Number(l.installment_amount || 0),
+          total_installments: 12,
+          paid_installments: 1,
+          due_day: 10
+        }));
+        await supabase.from('loans').insert(newLoans);
+      }
+
+      // 3. Crear Transacciones
+      if (migrationData.items?.length > 0) {
+        const rows = migrationData.items.map((item: any) => ({
+          user_id: user.id,
+          description: item.description,
+          amount: Number(item.amount),
+          category: item.category || 'Otros',
+          type: item.type || 'expense',
+          date: item.date || new Date().toISOString().split('T')[0],
+          installment_number: item.installment_number || 1,
+          total_installments: item.total_installments || 1
+        }));
+        await supabase.from('transactions').insert(rows);
+      }
+
       setIsImportModalOpen(false);
-      setParsedItems([]);
+      setMigrationData(null);
       setImportText('');
-      loadTransactions(user.id);
-      alert(`¡Se importaron ${rows.length} registros con éxito!`);
-    } else {
-      alert('Error al guardar datos: ' + error.message);
+      setImportFile(null);
+      refreshAll(user.id);
+      alert('¡Migración exitosa! Se configuraron tus entidades y movimientos.');
+    } catch (err: any) {
+      alert('Error al sincronizar con Supabase: ' + err.message);
     }
   }
 
@@ -240,17 +265,10 @@ export default function DashboardFinanzas() {
           <div className="flex flex-wrap items-center gap-2">
             <button 
               onClick={() => setIsImportModalOpen(true)}
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 transition-colors"
-            >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-              Importar Planilla / Datos
-            </button>
-            <button 
-              onClick={() => setIsStatementModalOpen(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm transition-colors"
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white text-xs font-semibold px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition-all"
             >
               <Sparkles className="w-4 h-4 text-cyan-200" />
-              Escanear Resumen Tarjeta
+              Migrar o Importar con IA (PDF / Excel)
             </button>
             <button 
               onClick={() => supabase.auth.signOut()} 
@@ -296,7 +314,6 @@ export default function DashboardFinanzas() {
 
         {/* Bloque: Tarjetas de Crédito y Préstamos */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Tarjetas */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -319,7 +336,7 @@ export default function DashboardFinanzas() {
                     <p className="text-xs font-bold text-slate-800">{c.name}</p>
                     <p className="text-[10px] text-slate-500">Cierre: Día {c.closing_day} • Vence: Día {c.due_day}</p>
                     {c.credit_limit > 0 && (
-                      <p className="text-[10px] text-slate-400">Límite: ${Number(c.credit_limit).toLocaleString('es-AR')}</p>
+                      <p className="text-[10px] text-slate-400">Saldo/Límite: ${Number(c.credit_limit).toLocaleString('es-AR')}</p>
                     )}
                   </div>
                 ))}
@@ -327,7 +344,6 @@ export default function DashboardFinanzas() {
             )}
           </div>
 
-          {/* Préstamos y Deudas */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex items-center gap-2">
               <Landmark className="w-4 h-4 text-amber-600" />
@@ -340,8 +356,10 @@ export default function DashboardFinanzas() {
                 {loans.map(l => (
                   <div key={l.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
                     <p className="text-xs font-bold text-slate-800">{l.entity}</p>
-                    <p className="text-[10px] text-slate-500">Cuota: ${Number(l.installment_amount).toLocaleString('es-AR')}</p>
-                    <p className="text-[10px] text-amber-600 font-semibold">Progreso: {l.paid_installments} de {l.total_installments} cuotas</p>
+                    {l.installment_amount > 0 && (
+                      <p className="text-[10px] text-slate-500">Cuota: ${Number(l.installment_amount).toLocaleString('es-AR')}</p>
+                    )}
+                    <p className="text-[10px] text-amber-600 font-semibold">Total: ${Number(l.total_amount).toLocaleString('es-AR')}</p>
                   </div>
                 ))}
               </div>
@@ -376,7 +394,7 @@ export default function DashboardFinanzas() {
                   type="text" 
                   value={description}
                   onChange={e => setDescription(e.target.value)}
-                  placeholder={transType === 'income' ? 'Ej: Sueldo mensual / Honorarios' : 'Ej: Compra supermercado'} 
+                  placeholder={transType === 'income' ? 'Ej: Sueldo mensual / Aguinaldo' : 'Ej: Compra supermercado'} 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500"
                   required 
                 />
@@ -517,8 +535,8 @@ export default function DashboardFinanzas() {
                   <p className="text-xs font-semibold text-slate-800">{t.description}</p>
                   <span className="text-[10px] text-slate-400">
                     {t.type === 'income' ? `Ingreso: ${t.income_source}` : `Gasto: ${t.category}`}
-                    {t.credit_card_id && ` • Tarjeta vinculada`}
-                    {t.loan_id && ` • Préstamo vinculado`}
+                    {t.credit_card_id && ` • Tarjeta`}
+                    {t.loan_id && ` • Préstamo`}
                     {` • ${t.date}`}
                   </span>
                 </div>
@@ -537,62 +555,101 @@ export default function DashboardFinanzas() {
 
       </div>
 
-      {/* Modal: Importar Planilla / Historial de Usuario Nuevo con IA */}
+      {/* Modal: Asistente Integral de Migración (PDF, Foto o Texto de Excel) */}
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
+          <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
-                <h3 className="text-base font-bold text-slate-900">Importar Planilla o Datos Anteriores</h3>
+                <Sparkles className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-base font-bold text-slate-900">Migrar Datos con Gemini IA</h3>
               </div>
-              <button onClick={() => setIsImportModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); }} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-500">
-              Copia y pega las filas de tu Excel, un listado de WhatsApp o un borrador. La IA detectará montos, fechas, ingresos y categorías de manera automática.
-            </p>
+            {!migrationData ? (
+              <div className="space-y-4">
+                {/* Carga de Archivo */}
+                <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-500 transition-colors">
+                  <input 
+                    type="file" 
+                    id="file-upload-input"
+                    accept="application/pdf,image/*" 
+                    className="hidden" 
+                    onChange={e => setImportFile(e.target.files?.[0] || null)}
+                  />
+                  <label htmlFor="file-upload-input" className="cursor-pointer flex flex-col items-center gap-1.5">
+                    <UploadCloud className="w-8 h-8 text-indigo-500" />
+                    <span className="text-xs font-semibold text-slate-700">
+                      {importFile ? `Archivo: ${importFile.name}` : 'Subir resumen o planilla en PDF / Imagen'}
+                    </span>
+                    <span className="text-[10px] text-slate-400">La IA extraerá tarjetas, deudas y consumos</span>
+                  </label>
+                </div>
 
-            <textarea 
-              value={importText}
-              onChange={e => setImportText(e.target.value)}
-              placeholder="Ejemplo:
-2026-09-01 Sueldo 950000
-2026-09-03 Coto compras 45000
-2026-09-05 Nafta YPF 18000
-Honorarios freelance 120000"
-              className="w-full h-36 border border-slate-200 rounded-2xl p-3 text-xs outline-none focus:border-emerald-500 font-mono"
-            />
+                <div className="text-center text-[11px] text-slate-400 font-semibold">— O PEGA EL TEXTO DE TU PLANILLA —</div>
 
-            <button 
-              onClick={handleImportWithAI}
-              disabled={uploadingFile || !importText.trim()}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
-            >
-              <Sparkles className="w-4 h-4 text-emerald-200" />
-              {uploadingFile ? 'Interpretando con Gemini IA...' : 'Interpretar y Clasificar con IA'}
-            </button>
-
-            {parsedItems.length > 0 && (
-              <div className="flex-1 overflow-y-auto space-y-2 border-t border-slate-100 pt-3">
-                <span className="text-[11px] font-bold text-slate-700">Registros identificados ({parsedItems.length}):</span>
-                {parsedItems.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center text-xs p-2 bg-slate-50 rounded-lg">
-                    <div>
-                      <span className="font-semibold text-slate-800">{item.description}</span>
-                      <span className="text-[10px] text-slate-400 ml-2">({item.category || item.income_source})</span>
-                    </div>
-                    <span className="font-bold text-slate-900">${Number(item.amount).toLocaleString('es-AR')}</span>
-                  </div>
-                ))}
+                <textarea 
+                  value={importText}
+                  onChange={e => setImportText(e.target.value)}
+                  placeholder="Pega aquí filas copiadas de Google Sheets o Excel, o texto libre..."
+                  className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-indigo-500 font-mono"
+                />
 
                 <button 
-                  onClick={handleConfirmBatch}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                  onClick={handleExecuteAIImport}
+                  disabled={uploading || (!importFile && !importText.trim())}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl flex items-center justify-center gap-2 transition-colors"
                 >
-                  <CheckCircle2 className="w-4 h-4" /> Guardar todo en mi Panel
+                  <Sparkles className="w-4 h-4 text-cyan-200" />
+                  {uploading ? 'Gemini está analizando y organizando...' : 'Analizar y Extraer Estructura Completa'}
+                </button>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto space-y-4">
+                {/* Entidades Detectadas */}
+                <div className="p-3 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-2 text-xs">
+                  <span className="font-bold text-indigo-900">Entidades que se darán de alta automáticamente:</span>
+                  <div className="flex flex-wrap gap-2">
+                    {migrationData.detected_cards?.map((c: any, i: number) => (
+                      <span key={i} className="bg-white px-2.5 py-1 rounded-lg border border-indigo-200 text-indigo-800 font-semibold text-[11px] flex items-center gap-1">
+                        <CreditCard className="w-3 h-3 text-indigo-500" /> {c.name}
+                      </span>
+                    ))}
+                    {migrationData.detected_loans?.map((l: any, i: number) => (
+                      <span key={i} className="bg-white px-2.5 py-1 rounded-lg border border-amber-200 text-amber-800 font-semibold text-[11px] flex items-center gap-1">
+                        <Landmark className="w-3 h-3 text-amber-500" /> {l.entity}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Movimientos */}
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-bold text-slate-700">Movimientos identificados ({migrationData.items?.length}):</span>
+                  {migrationData.items?.map((item: any, idx: number) => (
+                    <div key={idx} className="flex justify-between items-center text-xs p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                      <div>
+                        <p className="font-semibold text-slate-800">{item.description}</p>
+                        <span className="text-[10px] text-slate-400">
+                          {item.type === 'income' ? 'Ingreso' : 'Gasto'} • {item.category}
+                        </span>
+                      </div>
+                      <span className={`font-bold ${item.type === 'income' ? 'text-emerald-600' : 'text-slate-900'}`}>
+                        ${Number(item.amount).toLocaleString('es-AR')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <button 
+                  onClick={handleConfirmMigration}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Confirmar y Crear Todo en mi SaaS
                 </button>
               </div>
             )}
@@ -600,7 +657,7 @@ Honorarios freelance 120000"
         </div>
       )}
 
-      {/* Modal: Agregar Tarjeta de Crédito */}
+      {/* Modal: Crear Tarjeta Manual */}
       {isCardModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
@@ -617,7 +674,7 @@ Honorarios freelance 120000"
                   type="text" 
                   value={newCardName}
                   onChange={e => setNewCardName(e.target.value)}
-                  placeholder="Ej: Visa Santander / Master MP" 
+                  placeholder="Ej: Visa Banco Nación / Master MP" 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
                   required
                 />
@@ -645,7 +702,7 @@ Honorarios freelance 120000"
                 </div>
               </div>
               <div>
-                <label className="text-xs text-slate-500">Límite Disponible ($)</label>
+                <label className="text-xs text-slate-500">Saldo o Límite ($)</label>
                 <input 
                   type="number" 
                   value={newCardLimit}

@@ -11,9 +11,12 @@ import {
   PieChart as PieIcon,
   Sparkles,
   CreditCard,
+  FileSpreadsheet,
   UploadCloud,
   CheckCircle2,
-  X
+  X,
+  Landmark,
+  Plus
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -27,20 +30,33 @@ export default function DashboardFinanzas() {
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [creditCards, setCreditCards] = useState<any[]>([]);
-  
-  // Formulario manual
+  const [loans, setLoans] = useState<any[]>([]);
+
+  // Estados del Formulario Manual
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Alimentos');
   const [incomeSource, setIncomeSource] = useState('salary');
+  const [selectedCardId, setSelectedCardId] = useState<string>('');
+  const [selectedLoanId, setSelectedLoanId] = useState<string>('');
 
-  // Modal y Parser de Resúmenes
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // Modales
+  const [isStatementModalOpen, setIsStatementModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isCardModalOpen, setIsCardModalOpen] = useState(false);
+
+  // Estados de IA / Importación
+  const [importText, setImportText] = useState('');
   const [uploadingFile, setUploadingFile] = useState(false);
   const [parsedItems, setParsedItems] = useState<any[]>([]);
   const [statementSummary, setStatementSummary] = useState<any>(null);
-  const [selectedCardId, setSelectedCardId] = useState<string>('');
+
+  // Formulario nueva tarjeta
+  const [newCardName, setNewCardName] = useState('');
+  const [newCardClosing, setNewCardClosing] = useState('20');
+  const [newCardDue, setNewCardDue] = useState('5');
+  const [newCardLimit, setNewCardLimit] = useState('');
 
   useEffect(() => {
     fetchSessionAndData();
@@ -53,6 +69,7 @@ export default function DashboardFinanzas() {
         setUser(session.user);
         loadTransactions(session.user.id);
         loadCards(session.user.id);
+        loadLoans(session.user.id);
       }
     } catch (err) {
       console.error(err);
@@ -71,14 +88,13 @@ export default function DashboardFinanzas() {
   }
 
   async function loadCards(userId: string) {
-    const { data } = await supabase
-      .from('credit_cards')
-      .select('*')
-      .eq('user_id', userId);
-    if (data && data.length > 0) {
-      setCreditCards(data);
-      setSelectedCardId(data[0].id);
-    }
+    const { data } = await supabase.from('credit_cards').select('*').eq('user_id', userId);
+    if (data) setCreditCards(data);
+  }
+
+  async function loadLoans(userId: string) {
+    const { data } = await supabase.from('loans').select('*').eq('user_id', userId);
+    if (data) setLoans(data);
   }
 
   async function handleAddTransaction(e: React.FormEvent) {
@@ -92,6 +108,8 @@ export default function DashboardFinanzas() {
       type: transType,
       category: transType === 'expense' ? category : 'Ingreso',
       income_source: transType === 'income' ? incomeSource : null,
+      credit_card_id: transType === 'expense' && selectedCardId ? selectedCardId : null,
+      loan_id: transType === 'expense' && selectedLoanId ? selectedLoanId : null,
       date: new Date().toISOString().split('T')[0]
     };
 
@@ -99,9 +117,33 @@ export default function DashboardFinanzas() {
     if (!error) {
       setAmount('');
       setDescription('');
+      setSelectedCardId('');
+      setSelectedLoanId('');
       loadTransactions(user.id);
     } else {
       alert('Error guardando transacción: ' + error.message);
+    }
+  }
+
+  async function handleCreateCard(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newCardName || !user) return;
+
+    const { error } = await supabase.from('credit_cards').insert([{
+      user_id: user.id,
+      name: newCardName,
+      closing_day: parseInt(newCardClosing),
+      due_day: parseInt(newCardDue),
+      credit_limit: parseFloat(newCardLimit || '0')
+    }]);
+
+    if (!error) {
+      setNewCardName('');
+      setNewCardLimit('');
+      setIsCardModalOpen(false);
+      loadCards(user.id);
+    } else {
+      alert('Error creando tarjeta: ' + error.message);
     }
   }
 
@@ -110,37 +152,28 @@ export default function DashboardFinanzas() {
     if (!error && user) loadTransactions(user.id);
   }
 
-  // Subir y Procesar Resumen con Gemini
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  // Parsear texto o planilla pegada por un usuario nuevo
+  async function handleImportWithAI() {
+    if (!importText.trim()) return;
     setUploadingFile(true);
-    setParsedItems([]);
-    setStatementSummary(null);
-
-    const formData = new FormData();
-    formData.append('file', file);
 
     try {
       const res = await fetch('/api/parse-statement', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw_text: importText }),
       });
-
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error procesando el resumen');
-
-      setStatementSummary(data);
+      if (!res.ok) throw new Error(data.error || 'Error procesando texto');
       setParsedItems(data.items || []);
     } catch (err: any) {
-      alert('Fallo en el análisis: ' + err.message);
+      alert('Error al interpretar datos: ' + err.message);
     } finally {
       setUploadingFile(false);
     }
   }
 
-  // Confirmar y Guardar masivamente en Supabase
+  // Confirmar inserción en bloque
   async function handleConfirmBatch() {
     if (!user || parsedItems.length === 0) return;
 
@@ -149,7 +182,7 @@ export default function DashboardFinanzas() {
       description: item.description,
       amount: Number(item.amount),
       category: item.category || 'Otros',
-      type: 'expense',
+      type: item.type || 'expense',
       date: item.date || new Date().toISOString().split('T')[0],
       installment_number: item.installment_number || 1,
       total_installments: item.total_installments || 1,
@@ -158,13 +191,14 @@ export default function DashboardFinanzas() {
 
     const { error } = await supabase.from('transactions').insert(rows);
     if (!error) {
-      setIsModalOpen(false);
+      setIsStatementModalOpen(false);
+      setIsImportModalOpen(false);
       setParsedItems([]);
-      setStatementSummary(null);
+      setImportText('');
       loadTransactions(user.id);
-      alert(`¡Se guardaron ${rows.length} consumos con éxito!`);
+      alert(`¡Se importaron ${rows.length} registros con éxito!`);
     } else {
-      alert('Error guardando consumos: ' + error.message);
+      alert('Error al guardar datos: ' + error.message);
     }
   }
 
@@ -203,19 +237,26 @@ export default function DashboardFinanzas() {
             <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
             <p className="text-xs text-slate-500">{user?.email}</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button 
-              onClick={() => setIsModalOpen(true)}
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-semibold px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm hover:opacity-95"
+              onClick={() => setIsImportModalOpen(true)}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 transition-colors"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+              Importar Planilla / Datos
+            </button>
+            <button 
+              onClick={() => setIsStatementModalOpen(true)}
+              className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm transition-colors"
             >
               <Sparkles className="w-4 h-4 text-cyan-200" />
-              Escanear Resumen Tarjeta (IA)
+              Escanear Resumen Tarjeta
             </button>
             <button 
               onClick={() => supabase.auth.signOut()} 
               className="text-xs text-red-500 border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition-colors"
             >
-              Cerrar sesión
+              Salir
             </button>
           </div>
         </header>
@@ -250,6 +291,61 @@ export default function DashboardFinanzas() {
               </h3>
             </div>
             <Wallet className="w-10 h-10 text-blue-500 opacity-20" />
+          </div>
+        </div>
+
+        {/* Bloque: Tarjetas de Crédito y Préstamos */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Tarjetas */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <CreditCard className="w-4 h-4 text-blue-600" />
+                <h3 className="text-sm font-bold text-slate-900">Mis Tarjetas de Crédito</h3>
+              </div>
+              <button 
+                onClick={() => setIsCardModalOpen(true)}
+                className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 font-semibold"
+              >
+                <Plus className="w-3.5 h-3.5" /> Agregar Tarjeta
+              </button>
+            </div>
+            {creditCards.length === 0 ? (
+              <p className="text-xs text-slate-400">No tienes tarjetas registradas aún.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {creditCards.map(c => (
+                  <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                    <p className="text-xs font-bold text-slate-800">{c.name}</p>
+                    <p className="text-[10px] text-slate-500">Cierre: Día {c.closing_day} • Vence: Día {c.due_day}</p>
+                    {c.credit_limit > 0 && (
+                      <p className="text-[10px] text-slate-400">Límite: ${Number(c.credit_limit).toLocaleString('es-AR')}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Préstamos y Deudas */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+            <div className="flex items-center gap-2">
+              <Landmark className="w-4 h-4 text-amber-600" />
+              <h3 className="text-sm font-bold text-slate-900">Préstamos & Billeteras Digitales</h3>
+            </div>
+            {loans.length === 0 ? (
+              <p className="text-xs text-slate-400">No registras préstamos activos.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {loans.map(l => (
+                  <div key={l.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
+                    <p className="text-xs font-bold text-slate-800">{l.entity}</p>
+                    <p className="text-[10px] text-slate-500">Cuota: ${Number(l.installment_amount).toLocaleString('es-AR')}</p>
+                    <p className="text-[10px] text-amber-600 font-semibold">Progreso: {l.paid_installments} de {l.total_installments} cuotas</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -300,22 +396,56 @@ export default function DashboardFinanzas() {
               </div>
 
               {transType === 'expense' ? (
-                <div>
-                  <label className="text-xs text-slate-500">Rubro / Categoría</label>
-                  <select 
-                    value={category}
-                    onChange={e => setCategory(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
-                  >
-                    <option value="Supermercado">Supermercado</option>
-                    <option value="Servicios">Servicios / Facturas</option>
-                    <option value="Alimentos">Alimentos / Restaurantes</option>
-                    <option value="Transporte">Transporte / Combustible</option>
-                    <option value="Tarjeta de Crédito">Pago Tarjeta</option>
-                    <option value="Préstamos">Cuota Préstamo</option>
-                    <option value="Otros">Otros</option>
-                  </select>
-                </div>
+                <>
+                  <div>
+                    <label className="text-xs text-slate-500">Rubro / Categoría</label>
+                    <select 
+                      value={category}
+                      onChange={e => setCategory(e.target.value)}
+                      className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
+                    >
+                      <option value="Supermercado">Supermercado</option>
+                      <option value="Servicios">Servicios / Facturas</option>
+                      <option value="Alimentos">Alimentos / Restaurantes</option>
+                      <option value="Transporte">Transporte / Combustible</option>
+                      <option value="Tarjeta de Crédito">Pago Tarjeta</option>
+                      <option value="Préstamos">Cuota Préstamo</option>
+                      <option value="Otros">Otros</option>
+                    </select>
+                  </div>
+
+                  {creditCards.length > 0 && (
+                    <div>
+                      <label className="text-xs text-slate-500">Asignar a Tarjeta (Opcional)</label>
+                      <select 
+                        value={selectedCardId}
+                        onChange={e => setSelectedCardId(e.target.value)}
+                        className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
+                      >
+                        <option value="">Ninguna / Gasto en Efectivo-Débito</option>
+                        {creditCards.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {loans.length > 0 && (
+                    <div>
+                      <label className="text-xs text-slate-500">Vincular a Préstamo (Opcional)</label>
+                      <select 
+                        value={selectedLoanId}
+                        onChange={e => setSelectedLoanId(e.target.value)}
+                        className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
+                      >
+                        <option value="">Ninguno</option>
+                        {loans.map(l => (
+                          <option key={l.id} value={l.id}>{l.entity}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </>
               ) : (
                 <div>
                   <label className="text-xs text-slate-500">Tipo de Ingreso</label>
@@ -387,7 +517,8 @@ export default function DashboardFinanzas() {
                   <p className="text-xs font-semibold text-slate-800">{t.description}</p>
                   <span className="text-[10px] text-slate-400">
                     {t.type === 'income' ? `Ingreso: ${t.income_source}` : `Gasto: ${t.category}`}
-                    {t.total_installments > 1 && ` (Cuota ${t.installment_number}/${t.total_installments})`}
+                    {t.credit_card_id && ` • Tarjeta vinculada`}
+                    {t.loan_id && ` • Préstamo vinculado`}
                     {` • ${t.date}`}
                   </span>
                 </div>
@@ -406,75 +537,130 @@ export default function DashboardFinanzas() {
 
       </div>
 
-      {/* Modal: Escaneo de Resumen con IA */}
-      {isModalOpen && (
+      {/* Modal: Importar Planilla / Historial de Usuario Nuevo con IA */}
+      {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
+          <div className="bg-white w-full max-w-xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
-                <CreditCard className="w-5 h-5 text-blue-600" />
-                <h3 className="text-base font-bold text-slate-900">Escanear Resumen con IA</h3>
+                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
+                <h3 className="text-base font-bold text-slate-900">Importar Planilla o Datos Anteriores</h3>
               </div>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setIsImportModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Zona de Carga */}
-            <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-blue-500 transition-colors">
-              <input 
-                type="file" 
-                id="statement-input"
-                accept="image/*,application/pdf" 
-                className="hidden" 
-                onChange={handleFileUpload} 
-                disabled={uploadingFile}
-              />
-              <label htmlFor="statement-input" className="cursor-pointer flex flex-col items-center gap-2">
-                <UploadCloud className="w-10 h-10 text-blue-500" />
-                <span className="text-xs font-semibold text-slate-700">
-                  {uploadingFile ? 'Analizando con Gemini IA...' : 'Haz clic para subir foto o PDF del resumen'}
-                </span>
-                <span className="text-[10px] text-slate-400">Soporta Visa, Mastercard, resúmenes bancarios y billeteras</span>
-              </label>
-            </div>
+            <p className="text-xs text-slate-500">
+              Copia y pega las filas de tu Excel, un listado de WhatsApp o un borrador. La IA detectará montos, fechas, ingresos y categorías de manera automática.
+            </p>
 
-            {/* Previsualización de ítems extraídos */}
+            <textarea 
+              value={importText}
+              onChange={e => setImportText(e.target.value)}
+              placeholder="Ejemplo:
+2026-09-01 Sueldo 950000
+2026-09-03 Coto compras 45000
+2026-09-05 Nafta YPF 18000
+Honorarios freelance 120000"
+              className="w-full h-36 border border-slate-200 rounded-2xl p-3 text-xs outline-none focus:border-emerald-500 font-mono"
+            />
+
+            <button 
+              onClick={handleImportWithAI}
+              disabled={uploadingFile || !importText.trim()}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <Sparkles className="w-4 h-4 text-emerald-200" />
+              {uploadingFile ? 'Interpretando con Gemini IA...' : 'Interpretar y Clasificar con IA'}
+            </button>
+
             {parsedItems.length > 0 && (
-              <div className="flex-1 overflow-y-auto space-y-3">
-                <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl text-xs">
-                  <div>
-                    <span className="font-semibold text-slate-700">{statementSummary?.bank_or_card || 'Resumen detectado'}</span>
-                    <p className="text-[11px] text-slate-400">Total detectado: ${statementSummary?.total_amount?.toLocaleString('es-AR')}</p>
-                  </div>
-                  <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                    {parsedItems.length} consumos listos
-                  </span>
-                </div>
-
-                <div className="space-y-1.5">
-                  {parsedItems.map((item, idx) => (
-                    <div key={idx} className="flex justify-between items-center text-xs p-2.5 rounded-xl border border-slate-100 bg-white">
-                      <div>
-                        <p className="font-semibold text-slate-800">{item.description}</p>
-                        <span className="text-[10px] text-slate-400">
-                          {item.category} {item.total_installments > 1 && `• Cuota ${item.installment_number}/${item.total_installments}`}
-                        </span>
-                      </div>
-                      <span className="font-bold text-slate-900">${Number(item.amount).toLocaleString('es-AR')}</span>
+              <div className="flex-1 overflow-y-auto space-y-2 border-t border-slate-100 pt-3">
+                <span className="text-[11px] font-bold text-slate-700">Registros identificados ({parsedItems.length}):</span>
+                {parsedItems.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-center text-xs p-2 bg-slate-50 rounded-lg">
+                    <div>
+                      <span className="font-semibold text-slate-800">{item.description}</span>
+                      <span className="text-[10px] text-slate-400 ml-2">({item.category || item.income_source})</span>
                     </div>
-                  ))}
-                </div>
+                    <span className="font-bold text-slate-900">${Number(item.amount).toLocaleString('es-AR')}</span>
+                  </div>
+                ))}
 
                 <button 
                   onClick={handleConfirmBatch}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-3 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 transition-colors"
                 >
-                  <CheckCircle2 className="w-4 h-4" />
-                  Confirmar e importar {parsedItems.length} consumos al panel
+                  <CheckCircle2 className="w-4 h-4" /> Guardar todo en mi Panel
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Agregar Tarjeta de Crédito */}
+      {isCardModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-900">Nueva Tarjeta de Crédito</h3>
+              <button onClick={() => setIsCardModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleCreateCard} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Nombre de la Tarjeta</label>
+                <input 
+                  type="text" 
+                  value={newCardName}
+                  onChange={e => setNewCardName(e.target.value)}
+                  placeholder="Ej: Visa Santander / Master MP" 
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-500">Día de Cierre</label>
+                  <input 
+                    type="number" 
+                    value={newCardClosing}
+                    onChange={e => setNewCardClosing(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Día de Vencimiento</label>
+                  <input 
+                    type="number" 
+                    value={newCardDue}
+                    onChange={e => setNewCardDue(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Límite Disponible ($)</label>
+                <input 
+                  type="number" 
+                  value={newCardLimit}
+                  onChange={e => setNewCardLimit(e.target.value)}
+                  placeholder="0.00" 
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
+                />
+              </div>
+              <button 
+                type="submit" 
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors"
+              >
+                Guardar Tarjeta
+              </button>
+            </form>
           </div>
         </div>
       )}

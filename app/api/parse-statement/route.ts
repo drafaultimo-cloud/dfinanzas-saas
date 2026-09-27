@@ -5,48 +5,59 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData();
-    const file = formData.get('file') as File | null;
+    const contentType = req.headers.get('content-type') || '';
+    let contentsPayload: any[] = [];
 
-    if (!file) {
-      return NextResponse.json({ error: 'No se envió ningún comprobante o resumen' }, { status: 400 });
-    }
+    if (contentType.includes('application/json')) {
+      const body = await req.json();
+      if (!body.raw_text) {
+        return NextResponse.json({ error: 'No se envió texto para analizar' }, { status: 400 });
+      }
 
-    const bytes = await file.arrayBuffer();
-    const base64Data = Buffer.from(bytes).toString('base64');
+      const prompt = `
+Analiza el siguiente texto o planilla desordenada de finanzas personales.
+Extrae todas las transacciones individuales (ingresos y gastos).
+Texto a analizar:
+"${body.raw_text}"
 
-    const prompt = `
-Eres un auditor y contador experto. Analiza este resumen de tarjeta de crédito (o extracto bancario).
-Extrae todos los consumos o transacciones individuales que figuren en el detalle.
-Para cada ítem, extrae:
-- date: Fecha de la transacción en formato YYYY-MM-DD. Si solo figura día y mes, asume el año en curso.
-- description: Nombre del comercio o concepto claro (ej: 'Coto', 'Shell', 'Netflix').
-- amount: Monto numérico en positivo (flotante, sin signos de moneda).
-- installment_number: Cuota actual (ej: si dice 03/06, es 3. Si no hay cuotas, es 1).
-- total_installments: Total de cuotas (ej: si dice 03/06, es 6. Si no hay cuotas, es 1).
-- category: Clasifícalo estrictamente en uno de estos rubros:
-  ['Supermercado', 'Servicios', 'Alimentos', 'Transporte', 'Tarjeta de Crédito', 'Otros'].
+Para cada registro determina:
+- description: Detalle o comercio.
+- amount: Monto numérico en positivo (flotante).
+- type: 'income' si es sueldo o cobranza, 'expense' si es gasto.
+- category: Supermercado, Servicios, Alimentos, Transporte, Tarjeta de Crédito, Préstamos, u Otros.
+- date: Fecha en YYYY-MM-DD (si no indica fecha, usa la fecha actual).
 `;
+      contentsPayload = [prompt];
+    } else {
+      const formData = await req.formData();
+      const file = formData.get('file') as File | null;
+      if (!file) return NextResponse.json({ error: 'No se envió archivo' }, { status: 400 });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [
+      const bytes = await file.arrayBuffer();
+      const base64Data = Buffer.from(bytes).toString('base64');
+      const prompt = `Analiza este resumen bancario y extrae todos los consumos con fecha, descripción, monto, cuota y categoría.`;
+
+      contentsPayload = [
         {
           inlineData: {
             mimeType: file.type || 'image/jpeg',
             data: base64Data,
           },
         },
-        prompt,
-      ],
+        prompt
+      ];
+    }
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: contentsPayload,
       config: {
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            bank_or_card: { type: Type.STRING, description: 'Nombre de la entidad o tarjeta (ej: Visa Galicia, Master MP)' },
-            statement_period: { type: Type.STRING, description: 'Mes o período del resumen' },
-            total_amount: { type: Type.NUMBER, description: 'Monto total a pagar del resumen' },
+            bank_or_card: { type: Type.STRING },
+            total_amount: { type: Type.NUMBER },
             items: {
               type: Type.ARRAY,
               items: {
@@ -55,11 +66,12 @@ Para cada ítem, extrae:
                   date: { type: Type.STRING },
                   description: { type: Type.STRING },
                   amount: { type: Type.NUMBER },
+                  type: { type: Type.STRING },
+                  category: { type: Type.STRING },
                   installment_number: { type: Type.INTEGER },
                   total_installments: { type: Type.INTEGER },
-                  category: { type: Type.STRING },
                 },
-                required: ['description', 'amount', 'category'],
+                required: ['description', 'amount'],
               },
             },
           },
@@ -68,10 +80,8 @@ Para cada ítem, extrae:
       },
     });
 
-    const parsedJson = JSON.parse(response.text || '{}');
-    return NextResponse.json(parsedJson);
+    return NextResponse.json(JSON.parse(response.text || '{}'));
   } catch (error: any) {
-    console.error('Error parseando resumen con Gemini:', error);
-    return NextResponse.json({ error: error.message || 'Error al procesar el archivo con IA' }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'Error en Gemini' }, { status: 500 });
   }
 }

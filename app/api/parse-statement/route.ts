@@ -10,11 +10,11 @@ export async function POST(req: NextRequest) {
 
     const promptInstructions = `
 Extrae la información financiera de este texto, planilla o documento.
-Devuelve un JSON con:
-1. detected_cards: tarjetas de crédito (name, balance numérico).
-2. detected_loans: préstamos o deudas (entity, total_amount, installment_amount).
-3. items: cada transacción o consumo individual (description, amount numérico positivo, type ['income' o 'expense'], category, date en YYYY-MM-DD).
-Sé conciso y extrae montos limpios.
+Devuelve un JSON estrictamente estructurado con:
+1. detected_cards: tarjetas de crédito encontradas (name, balance numérico).
+2. detected_loans: préstamos, descubiertos o acuerdos (entity, total_amount numérico, installment_amount numérico).
+3. items: cada transacción individual (description, amount numérico en positivo, type ['income' o 'expense'], category, date en YYYY-MM-DD).
+Sé preciso y extrae montos limpios sin texto.
 `;
 
     if (contentType.includes('application/json')) {
@@ -44,76 +44,62 @@ Sé conciso y extrae montos limpios.
       ];
     }
 
-    const schemaConfig = {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          detected_cards: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                balance: { type: Type.NUMBER },
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: contentsPayload,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            detected_cards: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  balance: { type: Type.NUMBER },
+                },
+                required: ['name'],
               },
-              required: ['name'],
+            },
+            detected_loans: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  entity: { type: Type.STRING },
+                  total_amount: { type: Type.NUMBER },
+                  installment_amount: { type: Type.NUMBER },
+                },
+                required: ['entity'],
+              },
+            },
+            items: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  date: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  amount: { type: Type.NUMBER },
+                  type: { type: Type.STRING },
+                  category: { type: Type.STRING },
+                  installment_number: { type: Type.INTEGER },
+                  total_installments: { type: Type.INTEGER },
+                },
+                required: ['description', 'amount', 'type'],
+              },
             },
           },
-          detected_loans: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                entity: { type: Type.STRING },
-                total_amount: { type: Type.NUMBER },
-                installment_amount: { type: Type.NUMBER },
-              },
-              required: ['entity'],
-            },
-          },
-          items: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                date: { type: Type.STRING },
-                description: { type: Type.STRING },
-                amount: { type: Type.NUMBER },
-                type: { type: Type.STRING },
-                category: { type: Type.STRING },
-                installment_number: { type: Type.INTEGER },
-                total_installments: { type: Type.INTEGER },
-              },
-              required: ['description', 'amount', 'type'],
-            },
-          },
+          required: ['items'],
         },
-        required: ['items'],
       },
-    };
-
-    let response;
-    try {
-      // Modelo principal: 2.5 flash (alta disponibilidad en tier gratuito)
-      response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: contentsPayload,
-        config: schemaConfig,
-      });
-    } catch (primaryErr: any) {
-      console.warn('Fallback a modelo alternativo flash:', primaryErr.message);
-      // Fallback seguro: 2.0 flash (también con cuota gratuita activa)
-      response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash',
-        contents: contentsPayload,
-        config: schemaConfig,
-      });
-    }
+    });
 
     return NextResponse.json(JSON.parse(response.text || '{}'));
   } catch (error: any) {
-    console.error('Error final en endpoint:', error);
+    console.error('Error en endpoint parse-statement:', error);
     return NextResponse.json({ error: error.message || 'Error procesando datos' }, { status: 500 });
   }
 }

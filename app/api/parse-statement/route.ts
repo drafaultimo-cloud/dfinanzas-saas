@@ -3,18 +3,87 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
+// Función de reintento automático para mitigar saturación 503
+async function generateWithRetry(payload: any[], retries = 3, delay = 1500): Promise<any> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: payload,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              detected_cards: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    balance: { type: Type.NUMBER },
+                  },
+                  required: ['name'],
+                },
+              },
+              detected_loans: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    entity: { type: Type.STRING },
+                    total_amount: { type: Type.NUMBER },
+                    installment_amount: { type: Type.NUMBER },
+                  },
+                  required: ['entity'],
+                },
+              },
+              items: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    date: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    amount: { type: Type.NUMBER },
+                    type: { type: Type.STRING },
+                    category: { type: Type.STRING },
+                    installment_number: { type: Type.INTEGER },
+                    total_installments: { type: Type.INTEGER },
+                  },
+                  required: ['description', 'amount', 'type'],
+                },
+              },
+            },
+            required: ['items'],
+          },
+        },
+      });
+      return response;
+    } catch (err: any) {
+      const is503 = err?.message?.includes('503') || err?.status === 503 || err?.message?.includes('high demand');
+      if (is503 && i < retries - 1) {
+        console.warn(`Saturación 503 detectada. Reintentando intento ${i + 2} de ${retries} en ${delay}ms...`);
+        await new Promise((res) => setTimeout(res, delay * (i + 1)));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const contentType = req.headers.get('content-type') || '';
     let contentsPayload: any[] = [];
 
     const promptInstructions = `
-Extrae la información financiera de este texto, planilla o documento.
-Devuelve un JSON estrictamente estructurado con:
-1. detected_cards: tarjetas de crédito encontradas (name, balance numérico).
-2. detected_loans: préstamos, descubiertos o acuerdos (entity, total_amount numérico, installment_amount numérico).
-3. items: cada transacción individual (description, amount numérico en positivo, type ['income' o 'expense'], category, date en YYYY-MM-DD).
-Sé preciso y extrae montos limpios sin texto.
+Extrae la información financiera esencial de este documento o texto.
+Devuelve un JSON con:
+1. detected_cards: tarjetas de crédito (name, balance numérico).
+2. detected_loans: préstamos o deudas (entity, total_amount numérico, installment_amount numérico).
+3. items: cada movimiento individual (description, amount numérico positivo, type ['income' o 'expense'], category, date en YYYY-MM-DD).
+Sé sintético y extrae montos limpios.
 `;
 
     if (contentType.includes('application/json')) {
@@ -44,62 +113,10 @@ Sé preciso y extrae montos limpios sin texto.
       ];
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: contentsPayload,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            detected_cards: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  balance: { type: Type.NUMBER },
-                },
-                required: ['name'],
-              },
-            },
-            detected_loans: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  entity: { type: Type.STRING },
-                  total_amount: { type: Type.NUMBER },
-                  installment_amount: { type: Type.NUMBER },
-                },
-                required: ['entity'],
-              },
-            },
-            items: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  date: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  amount: { type: Type.NUMBER },
-                  type: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                  installment_number: { type: Type.INTEGER },
-                  total_installments: { type: Type.INTEGER },
-                },
-                required: ['description', 'amount', 'type'],
-              },
-            },
-          },
-          required: ['items'],
-        },
-      },
-    });
-
+    const response = await generateWithRetry(contentsPayload);
     return NextResponse.json(JSON.parse(response.text || '{}'));
   } catch (error: any) {
-    console.error('Error en endpoint parse-statement:', error);
+    console.error('Error final en endpoint parse-statement:', error);
     return NextResponse.json({ error: error.message || 'Error procesando datos' }, { status: 500 });
   }
 }

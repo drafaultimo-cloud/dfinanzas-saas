@@ -9,23 +9,12 @@ export async function POST(req: NextRequest) {
     let contentsPayload: any[] = [];
 
     const promptInstructions = `
-Eres un contador y arquitecto financiero experto de DRMIA.
-Analiza la información provista (puede ser un texto copiado de Excel, un PDF o imagen de un resumen bancario, planilla de deudas o extracto).
-
-Debes identificar y estructurar dos grupos de datos:
-1. ENTIDADES FINANCIERAS IDENTIFICADAS:
-   - credit_cards: Lista de tarjetas de crédito mencionadas (ej: 'Mastercard Banco Nación', 'Tarjeta Naranja X', 'Mastercard Mercado Pago'). Incluye su saldo o límite si figura.
-   - wallets: Billeteras virtuales o cuentas bancarias (ej: 'Mercado Pago', 'Banco Nación BNA', 'Efectivo').
-   - loans: Préstamos, descubiertos o acuerdos de pago (ej: 'Préstamo Personal', 'Descubierto').
-2. TRANSACCIONES Y MOVIMIENTOS:
-   - Extrae cada ingreso (sueldo fijo, aguinaldo, freelance) y cada gasto individual o cuota mensual.
-   - Para cada movimiento define:
-     * description: Detalle claro (ej: 'Sueldo mensual', 'Alquiler', 'Pago mínimo tarjeta').
-     * amount: Monto numérico en positivo (flotante, sin signos $ ni puntos de miles).
-     * type: 'income' si es sueldo/ingreso, o 'expense' si es gasto/pago.
-     * category: 'Sueldo', 'Alquiler', 'Supermercado', 'Servicios', 'Transporte', 'Tarjeta de Crédito', 'Préstamos', u 'Otros'.
-     * date: En formato YYYY-MM-DD (si no indica fecha exacta, usa la fecha de hoy).
-     * entity_name: Nombre de la tarjeta, banco o billetera a la que corresponde (si se puede determinar).
+Extrae la información financiera de este texto, planilla o documento.
+Devuelve un JSON con:
+1. detected_cards: tarjetas de crédito (name, balance numérico).
+2. detected_loans: préstamos o deudas (entity, total_amount, installment_amount).
+3. items: cada transacción o consumo individual (description, amount numérico positivo, type ['income' o 'expense'], category, date en YYYY-MM-DD).
+Sé conciso y extrae montos limpios.
 `;
 
     if (contentType.includes('application/json')) {
@@ -71,17 +60,6 @@ Debes identificar y estructurar dos grupos de datos:
               required: ['name'],
             },
           },
-          detected_wallets: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                balance: { type: Type.NUMBER },
-              },
-              required: ['name'],
-            },
-          },
           detected_loans: {
             type: Type.ARRAY,
             items: {
@@ -104,7 +82,6 @@ Debes identificar y estructurar dos grupos de datos:
                 amount: { type: Type.NUMBER },
                 type: { type: Type.STRING },
                 category: { type: Type.STRING },
-                entity_name: { type: Type.STRING },
                 installment_number: { type: Type.INTEGER },
                 total_installments: { type: Type.INTEGER },
               },
@@ -118,15 +95,17 @@ Debes identificar y estructurar dos grupos de datos:
 
     let response;
     try {
+      // Modelo principal: 2.5 flash (alta disponibilidad en tier gratuito)
       response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents: contentsPayload,
         config: schemaConfig,
       });
     } catch (primaryErr: any) {
-      console.warn('Fallback activado:', primaryErr.message);
+      console.warn('Fallback a modelo alternativo flash:', primaryErr.message);
+      // Fallback seguro: 2.0 flash (también con cuota gratuita activa)
       response = await ai.models.generateContent({
-        model: 'gemini-3.1-pro-preview',
+        model: 'gemini-2.0-flash',
         contents: contentsPayload,
         config: schemaConfig,
       });
@@ -134,7 +113,7 @@ Debes identificar y estructurar dos grupos de datos:
 
     return NextResponse.json(JSON.parse(response.text || '{}'));
   } catch (error: any) {
-    console.error('Error definitivo en endpoint:', error);
-    return NextResponse.json({ error: error.message || 'Error al procesar con IA' }, { status: 500 });
+    console.error('Error final en endpoint:', error);
+    return NextResponse.json({ error: error.message || 'Error procesando datos' }, { status: 500 });
   }
 }

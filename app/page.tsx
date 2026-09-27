@@ -17,7 +17,8 @@ import {
   X,
   Landmark,
   Plus,
-  Loader2
+  Loader2,
+  LogIn
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -32,6 +33,12 @@ export default function DashboardFinanzas() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [creditCards, setCreditCards] = useState<any[]>([]);
   const [loans, setLoans] = useState<any[]>([]);
+
+  // Estados de inicio de sesión directo
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
 
   // Formulario manual
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
@@ -60,21 +67,55 @@ export default function DashboardFinanzas() {
   const [newCardLimit, setNewCardLimit] = useState('');
 
   useEffect(() => {
-    fetchSessionAndData();
+    // Escuchar el estado de autenticación persistentemente
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+        await refreshAll(session.user.id);
+      } else {
+        setUser(null);
+      }
+      setLoading(false);
+    });
+
+    checkInitialSession();
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
-  async function fetchSessionAndData() {
+  async function checkInitialSession() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         setUser(session.user);
-        refreshAll(session.user.id);
+        await refreshAll(session.user.id);
       }
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: authEmail,
+      password: authPassword,
+    });
+
+    if (error) {
+      setAuthError(error.message);
+    } else if (data?.user) {
+      setUser(data.user);
+      await refreshAll(data.user.id);
+    }
+    setAuthLoading(false);
   }
 
   async function refreshAll(userId: string) {
@@ -171,22 +212,19 @@ export default function DashboardFinanzas() {
     }
   }
 
-  // Guardado masivo blindado con feedback inmediato
+  // Guardado masivo con resolución directa de sesión
   async function handleConfirmMigration() {
-    // Si la sesión no cargó en el estado, consultarla directamente a Supabase
-    let activeUser = user;
-    if (!activeUser) {
-      const { data: { session } } = await supabase.auth.getSession();
-      activeUser = session?.user;
-    }
+    // 1. Obtener la sesión real directamente de Supabase en caliente
+    const { data: sessionData } = await supabase.auth.getSession();
+    const currentSessionUser = sessionData?.session?.user || user;
 
-    if (!activeUser) {
-      alert('No se detectó sesión activa. Por favor, recarga la página e inicia sesión.');
+    if (!currentSessionUser) {
+      alert('Tu sesión caducó o no estás conectado. Por favor vuelve a identificarte para guardar tus finanzas.');
       return;
     }
 
     if (!migrationData || !migrationData.items || migrationData.items.length === 0) {
-      alert('No hay movimientos listos para importar.');
+      alert('No se detectaron transacciones para guardar.');
       return;
     }
 
@@ -196,7 +234,7 @@ export default function DashboardFinanzas() {
       // 1. Tarjetas detectadas
       if (migrationData.detected_cards && migrationData.detected_cards.length > 0) {
         const cardsToInsert = migrationData.detected_cards.map((c: any) => ({
-          user_id: activeUser.id,
+          user_id: currentSessionUser.id,
           name: String(c.name || 'Tarjeta'),
           closing_day: 20,
           due_day: 5,
@@ -208,7 +246,7 @@ export default function DashboardFinanzas() {
       // 2. Préstamos detectados
       if (migrationData.detected_loans && migrationData.detected_loans.length > 0) {
         const loansToInsert = migrationData.detected_loans.map((l: any) => ({
-          user_id: activeUser.id,
+          user_id: currentSessionUser.id,
           entity: String(l.entity || 'Préstamo'),
           total_amount: parseFloat(String(l.total_amount || '0').replace(/[^0-9.-]+/g, '')) || 0,
           installment_amount: parseFloat(String(l.installment_amount || '0').replace(/[^0-9.-]+/g, '')) || 0,
@@ -219,7 +257,7 @@ export default function DashboardFinanzas() {
         await supabase.from('loans').insert(loansToInsert);
       }
 
-      // 3. Sanitización de transacciones
+      // 3. Transacciones saneadas
       const today = new Date().toISOString().split('T')[0];
       const rows = migrationData.items.map((item: any) => {
         let cleanAmount = 0;
@@ -234,7 +272,7 @@ export default function DashboardFinanzas() {
         }
 
         return {
-          user_id: activeUser.id,
+          user_id: currentSessionUser.id,
           description: String(item.description || 'Movimiento importado'),
           amount: Math.abs(cleanAmount),
           category: item.category || 'Otros',
@@ -251,19 +289,74 @@ export default function DashboardFinanzas() {
         throw new Error('Supabase no aceptó los registros: ' + txError.message);
       }
 
-      // Éxito: limpiar y recargar
       setIsImportModalOpen(false);
       setMigrationData(null);
       setImportText('');
       setImportFile(null);
-      await refreshAll(activeUser.id);
-      alert(`¡Éxito! Se guardaron ${rows.length} movimientos y tus entidades en el panel.`);
+      await refreshAll(currentSessionUser.id);
+      alert(`¡Éxito! Se importaron ${rows.length} registros financieros.`);
     } catch (err: any) {
       console.error(err);
       alert('Aviso al guardar: ' + (err.message || 'Error de conexión'));
     } finally {
       setIsSavingBatch(false);
     }
+  }
+
+  if (loading) {
+    return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500 font-sans">Cargando datos...</div>;
+  }
+
+  // Pantalla de acceso si no hay sesión abierta
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
+        <div className="bg-white max-w-md w-full p-8 rounded-3xl border border-slate-100 shadow-xl space-y-6">
+          <div className="text-center space-y-2">
+            <h1 className="text-2xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
+            <p className="text-xs text-slate-500">Ingresa con tu cuenta para ver y guardar tus finanzas</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="text-xs text-slate-500">Correo Electrónico</label>
+              <input 
+                type="email" 
+                value={authEmail}
+                onChange={e => setAuthEmail(e.target.value)}
+                placeholder="tu@correo.com" 
+                className="w-full text-xs border border-slate-200 rounded-xl p-3 outline-none focus:border-blue-500"
+                required 
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Contraseña</label>
+              <input 
+                type="password" 
+                value={authPassword}
+                onChange={e => setAuthPassword(e.target.value)}
+                placeholder="••••••••" 
+                className="w-full text-xs border border-slate-200 rounded-xl p-3 outline-none focus:border-blue-500"
+                required 
+              />
+            </div>
+
+            {authError && (
+              <p className="text-xs text-red-500 bg-red-50 p-2.5 rounded-lg border border-red-100">{authError}</p>
+            )}
+
+            <button 
+              type="submit" 
+              disabled={authLoading}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
+              {authLoading ? 'Iniciando sesión...' : 'Ingresar al Panel'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
   }
 
   const totalIncome = transactions
@@ -288,8 +381,6 @@ export default function DashboardFinanzas() {
       }
       return acc;
     }, []);
-
-  if (loading) return <div className="p-8 text-center text-slate-500 font-sans">Cargando panel...</div>;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
@@ -521,7 +612,7 @@ export default function DashboardFinanzas() {
 
               <button 
                 type="submit" 
-                className={`w-full text-xs font-semibold py-2.5 rounded-xl text-white transition-colors ${transType === 'income' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                className={`w-full text-xs font-semibold py-2.5 rounded-xl text-white transition-colors cursor-pointer ${transType === 'income' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'}`}
               >
                 {transType === 'income' ? 'Registrar Ingreso' : 'Registrar Gasto'}
               </button>

@@ -16,7 +16,8 @@ import {
   CheckCircle2,
   X,
   Landmark,
-  Plus
+  Plus,
+  Loader2
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -49,6 +50,7 @@ export default function DashboardFinanzas() {
   const [importText, setImportText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [migrationData, setMigrationData] = useState<any>(null);
 
   // Formulario nueva tarjeta
@@ -169,15 +171,32 @@ export default function DashboardFinanzas() {
     }
   }
 
+  // Guardado masivo blindado con feedback inmediato
   async function handleConfirmMigration() {
-    if (!user || !migrationData) return;
-    setUploading(true);
+    // Si la sesión no cargó en el estado, consultarla directamente a Supabase
+    let activeUser = user;
+    if (!activeUser) {
+      const { data: { session } } = await supabase.auth.getSession();
+      activeUser = session?.user;
+    }
+
+    if (!activeUser) {
+      alert('No se detectó sesión activa. Por favor, recarga la página e inicia sesión.');
+      return;
+    }
+
+    if (!migrationData || !migrationData.items || migrationData.items.length === 0) {
+      alert('No hay movimientos listos para importar.');
+      return;
+    }
+
+    setIsSavingBatch(true);
 
     try {
       // 1. Tarjetas detectadas
       if (migrationData.detected_cards && migrationData.detected_cards.length > 0) {
         const cardsToInsert = migrationData.detected_cards.map((c: any) => ({
-          user_id: user.id,
+          user_id: activeUser.id,
           name: String(c.name || 'Tarjeta'),
           closing_day: 20,
           due_day: 5,
@@ -189,7 +208,7 @@ export default function DashboardFinanzas() {
       // 2. Préstamos detectados
       if (migrationData.detected_loans && migrationData.detected_loans.length > 0) {
         const loansToInsert = migrationData.detected_loans.map((l: any) => ({
-          user_id: user.id,
+          user_id: activeUser.id,
           entity: String(l.entity || 'Préstamo'),
           total_amount: parseFloat(String(l.total_amount || '0').replace(/[^0-9.-]+/g, '')) || 0,
           installment_amount: parseFloat(String(l.installment_amount || '0').replace(/[^0-9.-]+/g, '')) || 0,
@@ -200,45 +219,50 @@ export default function DashboardFinanzas() {
         await supabase.from('loans').insert(loansToInsert);
       }
 
-      // 3. Transacciones con sanitización de números
-      if (migrationData.items && migrationData.items.length > 0) {
-        const today = new Date().toISOString().split('T')[0];
-        
-        const rows = migrationData.items.map((item: any) => {
-          const cleanAmount = typeof item.amount === 'number' 
-            ? item.amount 
-            : parseFloat(String(item.amount || '0').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]+/g, '')) || 0;
-
-          return {
-            user_id: user.id,
-            description: String(item.description || 'Movimiento importado'),
-            amount: Math.abs(cleanAmount),
-            category: item.category || 'Otros',
-            type: item.type === 'income' ? 'income' : 'expense',
-            income_source: item.type === 'income' ? 'other' : null,
-            date: item.date && item.date.length === 10 ? item.date : today,
-            installment_number: Number(item.installment_number) || 1,
-            total_installments: Number(item.total_installments) || 1
-          };
-        });
-
-        const { error: txError } = await supabase.from('transactions').insert(rows);
-        if (txError) {
-          throw new Error('Supabase rechazó transacciones: ' + txError.message);
+      // 3. Sanitización de transacciones
+      const today = new Date().toISOString().split('T')[0];
+      const rows = migrationData.items.map((item: any) => {
+        let cleanAmount = 0;
+        if (typeof item.amount === 'number') {
+          cleanAmount = item.amount;
+        } else {
+          const strVal = String(item.amount || '0')
+            .replace(/\./g, '')
+            .replace(',', '.')
+            .replace(/[^0-9.-]+/g, '');
+          cleanAmount = parseFloat(strVal) || 0;
         }
+
+        return {
+          user_id: activeUser.id,
+          description: String(item.description || 'Movimiento importado'),
+          amount: Math.abs(cleanAmount),
+          category: item.category || 'Otros',
+          type: item.type === 'income' ? 'income' : 'expense',
+          income_source: item.type === 'income' ? 'other' : null,
+          date: (item.date && item.date.length === 10) ? item.date : today,
+          installment_number: Number(item.installment_number) || 1,
+          total_installments: Number(item.total_installments) || 1
+        };
+      });
+
+      const { error: txError } = await supabase.from('transactions').insert(rows);
+      if (txError) {
+        throw new Error('Supabase no aceptó los registros: ' + txError.message);
       }
 
+      // Éxito: limpiar y recargar
       setIsImportModalOpen(false);
       setMigrationData(null);
       setImportText('');
       setImportFile(null);
-      await refreshAll(user.id);
-      alert('¡Listo! Todos los registros y entidades se guardaron con éxito en tu panel.');
+      await refreshAll(activeUser.id);
+      alert(`¡Éxito! Se guardaron ${rows.length} movimientos y tus entidades en el panel.`);
     } catch (err: any) {
       console.error(err);
-      alert('Aviso al guardar: ' + err.message);
+      alert('Aviso al guardar: ' + (err.message || 'Error de conexión'));
     } finally {
-      setUploading(false);
+      setIsSavingBatch(false);
     }
   }
 
@@ -615,7 +639,7 @@ export default function DashboardFinanzas() {
                 <button 
                   onClick={handleExecuteAIImport}
                   disabled={uploading || (!importFile && !importText.trim())}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
                   <Sparkles className="w-4 h-4 text-cyan-200" />
                   {uploading ? 'Gemini está analizando y organizando...' : 'Analizar y Extraer Estructura Completa'}
@@ -658,11 +682,20 @@ export default function DashboardFinanzas() {
 
                 <button 
                   onClick={handleConfirmMigration}
-                  disabled={uploading}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                  disabled={isSavingBatch}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
                 >
-                  <CheckCircle2 className="w-4 h-4" />
-                  {uploading ? 'Guardando en Supabase...' : 'Confirmar y Crear Todo en mi SaaS'}
+                  {isSavingBatch ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>Guardando datos en Supabase... por favor espere</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Confirmar y Crear Todo en mi SaaS</span>
+                    </>
+                  )}
                 </button>
               </div>
             )}
@@ -726,7 +759,7 @@ export default function DashboardFinanzas() {
               </div>
               <button 
                 type="submit" 
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors cursor-pointer"
               >
                 Guardar Tarjeta
               </button>

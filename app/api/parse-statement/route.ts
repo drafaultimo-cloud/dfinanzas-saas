@@ -118,17 +118,15 @@ Debes identificar y estructurar dos grupos de datos:
 
     let response;
     try {
-      // Intento principal con modelo flash 2.5
       response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: contentsPayload,
         config: schemaConfig,
       });
     } catch (primaryErr: any) {
-      console.warn('Fallback activado tras error en modelo primario:', primaryErr.message);
-      // Fallback automático ante saturación (503 / High Demand)
+      console.warn('Fallback activado:', primaryErr.message);
       response = await ai.models.generateContent({
-        model: 'gemini-2.5-pro',
+        model: 'gemini-3.1-pro-preview',
         contents: contentsPayload,
         config: schemaConfig,
       });

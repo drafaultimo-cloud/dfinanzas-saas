@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- Fondo redondeado estilo app Android -->
+  <rect width="512" height="512" rx="112" fill="#0B192C"/>
+  <rect x="12" y="12" width="488" height="488" rx="102" fill="none" stroke="#00D7FF" stroke-width="5" stroke-opacity="0.3"/>
+
+  <!-- Bloque tipográfico central -->
+  <g transform="translate(256, 240)" text-anchor="middle" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <!-- Texto principal "DRM-IA" -->
+    <text font-size="82" font-weight="900" letter-spacing="-1">
+      <tspan fill="#FFFFFF">DRM</tspan>
+      <tspan fill="#00D7FF" dx="4">-</tspan>
+      <tspan fill="#00D7FF" dx="4">IA</tspan>
+    </text>
+
+    <!-- Subtítulo "Finanzas" debajo -->
+    <text y="75" font-size="34" font-weight="800" fill="#00D7FF" letter-spacing="8">
+      FINANZAS
+    </text>
+  </g>
+</svg>

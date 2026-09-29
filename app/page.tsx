@@ -21,7 +21,6 @@ import {
   Wallet, 
   UploadCloud, 
   ArrowRight, 
-  ShieldCheck, 
   BarChart3, 
   Zap, 
   Check, 
@@ -38,7 +37,6 @@ import {
   Download, 
   Briefcase, 
   User as UserIcon, 
-  BellRing, 
   Calculator 
 } from 'lucide-react';
 
@@ -52,9 +50,9 @@ const TRIAL_DAYS = 10;
 
 // Precios de Lanzamiento con 40% OFF por 6 meses
 const PLAN_ESENCIAL_REGULAR = 12000;
-const PLAN_ESENCIAL_PROMO = 7200; // 40% OFF
+const PLAN_ESENCIAL_PROMO = 7200;
 const PLAN_PRO_REGULAR = 24500;
-const PLAN_PRO_PROMO = 14700; // 40% OFF
+const PLAN_PRO_PROMO = 14700;
 
 export default function FinanzasDRMIA() {
   const [viewMode, setViewMode] = useState<'landing' | 'app'>('landing');
@@ -77,12 +75,11 @@ export default function FinanzasDRMIA() {
 
   // PWA Prompt
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [showInstallBanner, setShowInstallBanner] = useState(false);
 
-  // Perfil Dual (Personal vs. Negocio/PyME) y Multimoneda
+  // Perfil Dual y Multimoneda
   const [profileType, setProfileType] = useState<'personal' | 'business'>('personal');
   const [currencyMode, setCurrencyMode] = useState<'ARS' | 'USD'>('ARS');
-  const usdRate = 1350; // Tipo de cambio referencial MEP
+  const usdRate = 1350;
 
   // Datos financieros
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -95,7 +92,7 @@ export default function FinanzasDRMIA() {
   const [isLoadingDiagnosis, setIsLoadingDiagnosis] = useState<boolean>(false);
   const [isDiagnosisOpen, setIsDiagnosisOpen] = useState<boolean>(false);
 
-  // Simulador de Deudas (Bola de Nieve / Avalancha)
+  // Simulador de Deudas
   const [isSnowballModalOpen, setIsSnowballModalOpen] = useState(false);
 
   // Chat interno y Superusuario
@@ -149,24 +146,19 @@ export default function FinanzasDRMIA() {
   const [editCardDue, setEditCardDue] = useState('5');
   const [editCardLimit, setEditCardLimit] = useState('');
 
-  // Listener PWA para instalar la app
   useEffect(() => {
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
-      setShowInstallBanner(true);
     });
   }, []);
 
   function handleInstallApp() {
     if (deferredPrompt) {
       deferredPrompt.prompt();
-      deferredPrompt.userChoice.then(() => {
-        setDeferredPrompt(null);
-        setShowInstallBanner(false);
-      });
+      deferredPrompt.userChoice.then(() => setDeferredPrompt(null));
     } else {
-      alert('Para instalar en iPhone/iPad: toca el botón Compartir y selecciona "Agregar al inicio". En Android/Chrome selecciona "Instalar aplicación".');
+      alert('Para instalar en Android: toca los 3 puntos arriba a la derecha y selecciona "Instalar y crear acceso directo". En iPhone: toca Compartir y selecciona "Agregar al inicio".');
     }
   }
 
@@ -249,7 +241,6 @@ export default function FinanzasDRMIA() {
     await refreshAll(currentUser.id);
   }
 
-  // Métricas de Superusuario Dionicio
   async function loadAdminMetrics() {
     const { data: receipts } = await supabase
       .from('payment_receipts')
@@ -270,9 +261,8 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  // Notificación de mensajes no leídos
   async function checkUnreadMessages(currentUser: any) {
-    const { data, count } = await supabase
+    const { count } = await supabase
       .from('user_support_chats')
       .select('*', { count: 'exact' })
       .eq('receiver_email', currentUser.email)
@@ -294,13 +284,11 @@ export default function FinanzasDRMIA() {
 
     if (data) {
       setChatMessages(data);
-      // Marcar como leídos
       await supabase
         .from('user_support_chats')
         .update({ is_read: true })
         .eq('receiver_email', user.email)
         .eq('sender_email', otherEmail);
-      
       setUnreadCount(0);
     }
   }
@@ -310,10 +298,7 @@ export default function FinanzasDRMIA() {
     if (!newChatMessage.trim() || !user) return;
 
     const receiverEmail = user.email === ADMIN_EMAIL ? selectedChatUser?.user_email : ADMIN_EMAIL;
-    if (!receiverEmail) {
-      alert('Selecciona un usuario para responder');
-      return;
-    }
+    if (!receiverEmail) return;
 
     const { error } = await supabase
       .from('user_support_chats')
@@ -352,7 +337,7 @@ export default function FinanzasDRMIA() {
           setViewMode('app');
         }
       } else {
-        const { data, error } = await supabase.auth.signUp({
+        const { error } = await supabase.auth.signUp({
           email: authEmail,
           password: authPassword,
         });
@@ -378,7 +363,6 @@ export default function FinanzasDRMIA() {
 
       const res = await fetch('/api/verify-receipt', { method: 'POST', body: formData });
       const analysis = await res.json();
-
       if (!res.ok) throw new Error(analysis.error || 'Error al validar');
 
       const isApproved = analysis.is_valid_transfer === true;
@@ -407,7 +391,7 @@ export default function FinanzasDRMIA() {
         setHasPaidPlan(true);
         alert('¡Comprobante verificado con éxito por IA! Se aplicó tu bonificación del 40% por 6 meses.');
       } else {
-        alert('Comprobante recibido. La IA lo derivó a revisión para que Dionicio lo apruebe manualmente.');
+        alert('Comprobante recibido. La IA lo derivó a revisión para aprobación manual.');
       }
     } catch (err: any) {
       alert('Error al enviar comprobante: ' + err.message);
@@ -433,6 +417,8 @@ export default function FinanzasDRMIA() {
   async function handleRunAIDiagnosis() {
     setIsLoadingDiagnosis(true);
     setIsDiagnosisOpen(true);
+    setAiDiagnosis('');
+
     try {
       const res = await fetch('/api/financial-audit', {
         method: 'POST',
@@ -446,9 +432,13 @@ export default function FinanzasDRMIA() {
         })
       });
       const data = await res.json();
-      setAiDiagnosis(data.diagnosis || 'Auditoría completada.');
+      if (data.diagnosis) {
+        setAiDiagnosis(data.diagnosis);
+      } else {
+        setAiDiagnosis('No se encontraron desvíos significativos para este período.');
+      }
     } catch (e: any) {
-      setAiDiagnosis('Error al contactar al motor de IA: ' + e.message);
+      setAiDiagnosis('Error conectando con el auditor de IA: ' + e.message);
     } finally {
       setIsLoadingDiagnosis(false);
     }
@@ -667,7 +657,6 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  // Filtrado por Perfil (Personal vs. Negocio) y Mes
   const availableMonths = useMemo(() => {
     const monthsSet = new Set<string>();
     transactions.forEach(t => {
@@ -685,7 +674,6 @@ export default function FinanzasDRMIA() {
     });
   }, [transactions, selectedMonth, profileType]);
 
-  // Cálculos Financieros y KPIs de Alto Valor
   const totalIncome = useMemo(() => {
     return filteredTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + Number(t.amount || 0), 0);
   }, [filteredTransactions]);
@@ -700,38 +688,32 @@ export default function FinanzasDRMIA() {
     return creditCards.reduce((acc, c) => acc + Number(c.credit_limit || 0), 0);
   }, [creditCards]);
 
-  // 1. Ratio de Endeudamiento sobre Ingresos
   const debtRatio = useMemo(() => {
     if (totalIncome <= 0) return 0;
     return (totalDebt / totalIncome) * 100;
   }, [totalDebt, totalIncome]);
 
-  // 2. Tasa de Ahorro Real (%)
   const savingsRate = useMemo(() => {
     if (totalIncome <= 0) return 0;
     return ((totalIncome - totalExpense) / totalIncome) * 100;
   }, [totalIncome, totalExpense]);
 
-  // 3. Gasto Diario Promedio
   const dailyAverageExpense = useMemo(() => {
     const now = new Date();
     const currentDay = Math.max(now.getDate(), 1);
     return totalExpense / currentDay;
   }, [totalExpense]);
 
-  // 4. Días de Supervivencia / Fondo de Emergencia
   const survivalDays = useMemo(() => {
     if (dailyAverageExpense <= 0) return 999;
     const availableCash = Math.max(netBalance, 0);
     return Math.floor(availableCash / dailyAverageExpense);
   }, [netBalance, dailyAverageExpense]);
 
-  // 5. Proyección de Gasto al Cierre de Mes
   const projectedMonthEndExpense = useMemo(() => {
     return dailyAverageExpense * 30;
   }, [dailyAverageExpense]);
 
-  // Conversor Multimoneda Helper
   function formatMoney(amountArs: number) {
     if (currencyMode === 'USD') {
       const usdValue = amountArs / usdRate;
@@ -761,10 +743,9 @@ export default function FinanzasDRMIA() {
   if (viewMode === 'landing') {
     return (
       <div className="min-h-screen bg-[#08121f] text-slate-100 font-sans selection:bg-[#00D7FF] selection:text-[#0B192C]">
-        {/* Banner Superior Promocional */}
-        <div className="bg-gradient-to-r from-[#00D7FF] via-cyan-500 to-blue-600 text-[#0B192C] py-2.5 px-4 text-center text-xs font-extrabold tracking-wide shadow-md flex items-center justify-center gap-2">
+        <div className="bg-gradient-to-r from-[#00D7FF] via-cyan-500 to-blue-600 text-[#0B192C] py-2 px-4 text-center text-xs font-black tracking-wide flex items-center justify-center gap-2">
           <Gift className="w-4 h-4 animate-bounce" />
-          <span>🔥 PROMO LANZAMIENTO EXCLUSIVA: 40% DE BONIFICACIÓN DURANTE 6 MESES EN TODOS LOS PLANES • 10 DÍAS DE PRUEBA COMPLETA GRATIS</span>
+          <span>PROMO LANZAMIENTO: 40% DE BONIFICACIÓN POR 6 MESES • 10 DÍAS DE PRUEBA COMPLETA GRATIS</span>
         </div>
 
         <nav className="max-w-6xl mx-auto px-6 py-5 flex justify-between items-center border-b border-slate-800/80">
@@ -774,7 +755,7 @@ export default function FinanzasDRMIA() {
             </div>
             <div>
               <span className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                DRMIA <span className="text-xs bg-[#00D7FF]/10 text-[#00D7FF] px-2.5 py-0.5 rounded-full border border-[#00D7FF]/30">Finanzas SaaS</span>
+                DRM-IA <span className="text-xs bg-[#00D7FF]/10 text-[#00D7FF] px-2.5 py-0.5 rounded-full border border-[#00D7FF]/30">Finanzas</span>
               </span>
               <p className="text-[10px] text-slate-400">Soluciones Integrales para tu Negocio</p>
             </div>
@@ -802,7 +783,6 @@ export default function FinanzasDRMIA() {
           </div>
         </nav>
 
-        {/* Hero Section */}
         <header className="max-w-4xl mx-auto px-6 pt-14 pb-12 text-center space-y-6">
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#0B192C] border border-[#00D7FF]/40 text-[#00D7FF] text-xs font-semibold shadow-sm">
             <Sparkles className="w-3.5 h-3.5 text-[#00D7FF]" />
@@ -916,7 +896,7 @@ export default function FinanzasDRMIA() {
         </section>
 
         <footer className="border-t border-slate-800/80 py-8 text-center text-xs text-slate-500">
-          © 2026 DRMIA • Soluciones Integrales e Inteligencia Artificial • Río Gallegos
+          © 2026 DRM-IA • Soluciones Integrales e Inteligencia Artificial • Río Gallegos
         </footer>
       </div>
     );
@@ -936,7 +916,7 @@ export default function FinanzasDRMIA() {
             >
               ← Volver a la portada
             </button>
-            <span className="text-[10px] text-slate-500 font-mono">DRMIA AUTH</span>
+            <span className="text-[10px] text-slate-500 font-mono">DRM-IA AUTH</span>
           </div>
 
           <div className="text-center space-y-1">
@@ -1031,7 +1011,6 @@ export default function FinanzasDRMIA() {
             ¡Tu beneficio de 40% OFF por 6 meses ya está aplicado en el precio a transferir!
           </div>
 
-          {/* Selector de Plan con 40% OFF */}
           <div className="grid grid-cols-2 gap-3">
             <div 
               onClick={() => setSelectedPlanToPay('base')}
@@ -1055,16 +1034,14 @@ export default function FinanzasDRMIA() {
             </div>
           </div>
 
-          {/* Datos de Transferencia */}
           <div className="p-4 bg-[#132238] rounded-2xl border border-slate-700/80 space-y-2 text-xs">
             <p className="text-slate-300">Alias de Transferencia: <strong className="text-[#00D7FF] font-mono text-sm">drm-ia</strong></p>
-            <p className="text-slate-400">Titular: Dionicio Rafael Martin • DRMIA</p>
+            <p className="text-slate-400">Titular: Dionicio Rafael Martin • DRM-IA</p>
             <p className="text-slate-300">
               Monto bonificado a transferir: <strong className="text-emerald-400 text-sm">${(selectedPlanToPay === 'pro' ? PLAN_PRO_PROMO : PLAN_ESENCIAL_PROMO).toLocaleString('es-AR')}</strong>
             </p>
           </div>
 
-          {/* Chat de Validación IA */}
           <form onSubmit={handleUploadReceipt} className="space-y-3">
             <div className="border-2 border-dashed border-slate-700 rounded-2xl p-4 text-center hover:border-[#00D7FF] transition-colors">
               <input 
@@ -1103,7 +1080,7 @@ export default function FinanzasDRMIA() {
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Header con Perfil Dual, Multimoneda, Superusuario y Notificaciones */}
+        {/* Header con Perfil Dual, Multimoneda y Superusuario */}
         <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
           <div className="flex items-center gap-3">
             <button 
@@ -1115,7 +1092,7 @@ export default function FinanzasDRMIA() {
             </button>
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas DRMIA</h1>
+                <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas DRM-IA</h1>
                 {isTrialActive && !hasPaidPlan && (
                   <span className="bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1">
                     <Gift className="w-3 h-3 text-amber-600" /> Prueba: {trialDaysLeft} días
@@ -1137,7 +1114,6 @@ export default function FinanzasDRMIA() {
           </div>
           
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Selector de Perfil (Personal vs. Negocio/PyME) */}
             <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-semibold">
               <button 
                 onClick={() => setProfileType('personal')}
@@ -1149,11 +1125,10 @@ export default function FinanzasDRMIA() {
                 onClick={() => setProfileType('business')}
                 className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 cursor-pointer ${profileType === 'business' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}
               >
-                <Briefcase className="w-3.5 h-3.5" /> Negocio / PyME
+                <Briefcase className="w-3.5 h-3.5" /> Negocio
               </button>
             </div>
 
-            {/* Selector Multimoneda (ARS vs. USD MEP) */}
             <button 
               onClick={() => setCurrencyMode(prev => prev === 'ARS' ? 'USD' : 'ARS')}
               className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 flex items-center gap-1 cursor-pointer"
@@ -1161,13 +1136,12 @@ export default function FinanzasDRMIA() {
               <DollarSign className="w-3.5 h-3.5 text-emerald-600" /> {currencyMode}
             </button>
 
-            {/* Chat Interno con Alerta de Mensajes No Leídos */}
             <button 
               onClick={() => { setIsChatModalOpen(true); loadChatMessages(); }}
               className={`relative px-3 py-2 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors ${unreadCount > 0 ? 'bg-rose-600 text-white animate-pulse' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
             >
               <MessageSquare className="w-4 h-4" />
-              <span>Chat {user?.email === ADMIN_EMAIL ? 'Clientes' : 'con Dionicio'}</span>
+              <span>Chat {user?.email === ADMIN_EMAIL ? 'Clientes' : 'Dionicio'}</span>
               {unreadCount > 0 && (
                 <span className="bg-white text-rose-600 text-[10px] font-extrabold px-1.5 py-0.2 rounded-full">
                   {unreadCount}
@@ -1213,7 +1187,7 @@ export default function FinanzasDRMIA() {
           </div>
         </header>
 
-        {/* Barra de Acceso Directo al Auditor IA y Simulador */}
+        {/* Acceso Directo al Auditor IA */}
         <div className="bg-gradient-to-r from-[#0B192C] to-[#132238] p-4 rounded-2xl border border-slate-800 flex flex-wrap justify-between items-center gap-3">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-[#00D7FF]/10 text-[#00D7FF] flex items-center justify-center font-bold">
@@ -1221,7 +1195,7 @@ export default function FinanzasDRMIA() {
             </div>
             <div>
               <p className="text-xs font-bold text-white">Auditor Financiero con Inteligencia Artificial</p>
-              <p className="text-[11px] text-slate-400">Diagnóstico mensual de gastos hormiga, orden de pago y optimización de caja</p>
+              <p className="text-[11px] text-slate-400">Diagnóstico mensual de gastos hormiga, orden de liquidación de pasivos y optimización de caja</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -1279,9 +1253,8 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* NUEVAS MÉTRICAS FINANCIERAS (KPIS DE ALTO VALOR) */}
+        {/* KPIs de Salud Patrimonial */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Ratio de Endeudamiento con Semáforo */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-400">Ratio de Endeudamiento</span>
@@ -1293,7 +1266,6 @@ export default function FinanzasDRMIA() {
             </p>
           </div>
 
-          {/* Tasa de Ahorro Real */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-400">Tasa de Ahorro Real</span>
@@ -1303,7 +1275,6 @@ export default function FinanzasDRMIA() {
             <p className="text-[10px] text-slate-400">Excedente neto sobre el ingreso total</p>
           </div>
 
-          {/* Días de Supervivencia / Fondo de Emergencia */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-400">Días de Supervivencia</span>
@@ -1313,7 +1284,6 @@ export default function FinanzasDRMIA() {
             <p className="text-[10px] text-slate-400">Duración con saldo líquido actual</p>
           </div>
 
-          {/* Gasto Diario y Proyección Fin de Mes */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
             <div className="flex justify-between items-center">
               <span className="text-xs text-slate-400">Gasto Diario / Proyección</span>
@@ -1418,7 +1388,7 @@ export default function FinanzasDRMIA() {
                   type="text" 
                   value={description}
                   onChange={e => setDescription(e.target.value)}
-                  placeholder="Ej: Pago de mercadería o combustible" 
+                  placeholder="Ej: Pago a proveedor o supermercado" 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500"
                   required 
                 />
@@ -1438,7 +1408,7 @@ export default function FinanzasDRMIA() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500">Fecha del Movimiento</label>
+                  <label className="text-xs text-slate-500">Fecha</label>
                   <input 
                     type="date" 
                     value={customDate}
@@ -1509,7 +1479,7 @@ export default function FinanzasDRMIA() {
               onClick={() => window.print()}
               className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-3 py-1.5 rounded-xl border border-slate-200 flex items-center gap-1.5 cursor-pointer"
             >
-              <Download className="w-3.5 h-3.5" /> Exportar Informe Imprimible
+              <Download className="w-3.5 h-3.5" /> Exportar Informe
             </button>
           </div>
 
@@ -1538,7 +1508,7 @@ export default function FinanzasDRMIA() {
 
       </div>
 
-      {/* MODAL: CHAT INTERNO EN TIEMPO REAL */}
+      {/* MODAL: CHAT INTERNO */}
       {isChatModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col border border-slate-800">
@@ -1546,17 +1516,15 @@ export default function FinanzasDRMIA() {
               <div className="flex items-center gap-2">
                 <MessageSquare className="w-5 h-5 text-[#00D7FF]" />
                 <h3 className="text-base font-bold text-white">
-                  {user?.email === ADMIN_EMAIL ? `Chat con Clientes • (${adminUsersList.length} usuarios)` : 'Canal Directo con Dionicio (DRMIA)'}
+                  {user?.email === ADMIN_EMAIL ? `Chat Clientes • (${adminUsersList.length} usuarios)` : 'Canal Directo con Dionicio (DRM-IA)'}
                 </h3>
               </div>
-              <button onClick={() => setIsChatModalOpen(false)} className="text-slate-400 hover:text-slate-200">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setIsChatModalOpen(false)}><X className="w-5 h-5" /></button>
             </div>
 
             {user?.email === ADMIN_EMAIL && (
               <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-slate-800">
-                <span className="text-xs text-slate-400 font-bold whitespace-nowrap">Seleccionar cliente:</span>
+                <span className="text-xs text-slate-400 font-bold whitespace-nowrap">Cliente:</span>
                 {adminUsersList.map(u => (
                   <button 
                     key={u.user_id}
@@ -1569,9 +1537,9 @@ export default function FinanzasDRMIA() {
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto space-y-3 p-3 bg-[#08121f] rounded-2xl border border-slate-800/80 min-h-[280px]">
+            <div className="flex-1 overflow-y-auto space-y-3 p-3 bg-[#08121f] rounded-2xl border border-slate-800/80 min-h-[260px]">
               {chatMessages.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-10">No hay mensajes anteriores en este canal.</p>
+                <p className="text-xs text-slate-500 text-center py-10">Sin mensajes previos en esta conversación.</p>
               ) : (
                 chatMessages.map(msg => (
                   <div key={msg.id} className={`flex flex-col ${msg.sender_email === user?.email ? 'items-end' : 'items-start'}`}>
@@ -1589,7 +1557,7 @@ export default function FinanzasDRMIA() {
                 type="text" 
                 value={newChatMessage}
                 onChange={e => setNewChatMessage(e.target.value)}
-                placeholder="Escribe tu consulta o mensaje directo..."
+                placeholder="Escribe tu mensaje..."
                 className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white outline-none focus:border-[#00D7FF]"
               />
               <button type="submit" className="bg-[#00D7FF] text-[#0B192C] font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1 cursor-pointer">
@@ -1609,16 +1577,14 @@ export default function FinanzasDRMIA() {
                 <Sparkles className="w-5 h-5 text-[#00D7FF]" />
                 <h3 className="text-base font-bold text-white">Auditoría Financiera Mensual por IA</h3>
               </div>
-              <button onClick={() => setIsDiagnosisOpen(false)} className="text-slate-400 hover:text-slate-200">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setIsDiagnosisOpen(false)}><X className="w-5 h-5" /></button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 bg-[#132238] rounded-2xl border border-slate-700/80 text-xs text-slate-200 leading-relaxed font-sans whitespace-pre-line">
+            <div className="flex-1 overflow-y-auto p-4 bg-[#132238] rounded-2xl border border-slate-700/80 text-xs text-slate-200 leading-relaxed whitespace-pre-line font-sans">
               {isLoadingDiagnosis ? (
                 <div className="flex items-center justify-center py-12 gap-2 text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin text-[#00D7FF]" />
-                  <span>Gemini 3.8 Flash auditando movimientos, tarjetas y flujo de caja...</span>
+                  <span>Gemini 3.8 Flash analizando gastos, deudas y flujo de caja...</span>
                 </div>
               ) : (
                 aiDiagnosis
@@ -1628,18 +1594,16 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
-      {/* MODAL: SIMULADOR BOLA DE NIEVE / AVALANCHA */}
+      {/* MODAL: SIMULADOR BOLA DE NIEVE */}
       {isSnowballModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col border border-slate-800">
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <Calculator className="w-5 h-5 text-[#00D7FF]" />
-                <h3 className="text-base font-bold text-white">Plan de Desendeudamiento Bola de Nieve</h3>
+                <h3 className="text-base font-bold text-white">Plan Bola de Nieve para Desendeudamiento</h3>
               </div>
-              <button onClick={() => setIsSnowballModalOpen(false)} className="text-slate-400 hover:text-slate-200">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setIsSnowballModalOpen(false)}><X className="w-5 h-5" /></button>
             </div>
 
             <div className="space-y-3 text-xs text-slate-300">
@@ -1653,15 +1617,12 @@ export default function FinanzasDRMIA() {
                   </div>
                 ))}
               </div>
-              <p className="text-[11px] text-slate-400">
-                *Estrategia: Liquida primero el pasivo con saldo menor o vencimiento más inmediato, liberando flujo de caja para acelerar la cancelación de las siguientes deudas en cascada.
-              </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal: Editar Tarjeta */}
+      {/* Modales auxiliares */}
       {isEditCardModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
@@ -1670,33 +1631,18 @@ export default function FinanzasDRMIA() {
               <button onClick={() => setIsEditCardModalOpen(false)}><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleUpdateCard} className="space-y-3">
-              <div>
-                <label className="text-xs text-slate-500">Nombre</label>
-                <input type="text" value={editCardName} onChange={e => setEditCardName(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-              </div>
+              <input type="text" value={editCardName} onChange={e => setEditCardName(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
               <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-slate-500">Día de Cierre</label>
-                  <input type="number" min="1" max="31" value={editCardClosing} onChange={e => setEditCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none text-blue-600 font-bold" required />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500">Día de Vencimiento</label>
-                  <input type="number" min="1" max="31" value={editCardDue} onChange={e => setEditCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
-                </div>
+                <input type="number" min="1" max="31" value={editCardClosing} onChange={e => setEditCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
+                <input type="number" min="1" max="31" value={editCardDue} onChange={e => setEditCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
               </div>
-              <div>
-                <label className="text-xs text-slate-500">Saldo Deuda ($)</label>
-                <input type="number" step="0.01" value={editCardLimit} onChange={e => setEditCardLimit(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
-              </div>
-              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
-                Guardar Modificaciones
-              </button>
+              <input type="number" step="0.01" value={editCardLimit} onChange={e => setEditCardLimit(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar</button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Modal: Crear Tarjeta */}
       {isCardModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
@@ -1705,62 +1651,43 @@ export default function FinanzasDRMIA() {
               <button onClick={() => setIsCardModalOpen(false)}><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleCreateCard} className="space-y-3">
-              <div>
-                <label className="text-xs text-slate-500">Nombre</label>
-                <input type="text" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="Ej: Visa BNA / Master MP" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-              </div>
+              <input type="text" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="Nombre tarjeta" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
               <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-slate-500">Cierre</label>
-                  <input type="number" min="1" max="31" value={newCardClosing} onChange={e => setNewCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500">Vence</label>
-                  <input type="number" min="1" max="31" value={newCardDue} onChange={e => setNewCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-                </div>
+                <input type="number" min="1" max="31" value={newCardClosing} onChange={e => setNewCardClosing(e.target.value)} placeholder="Día cierre" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
+                <input type="number" min="1" max="31" value={newCardDue} onChange={e => setNewCardDue(e.target.value)} placeholder="Día vencimiento" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
               </div>
-              <div>
-                <label className="text-xs text-slate-500">Saldo Deuda ($)</label>
-                <input type="number" value={newCardLimit} onChange={e => setNewCardLimit(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
-              </div>
-              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
-                Guardar Tarjeta
-              </button>
+              <input type="number" value={newCardLimit} onChange={e => setNewCardLimit(e.target.value)} placeholder="Límite o saldo" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar</button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Modal: Migrar Datos con IA */}
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-indigo-600" />
-                <h3 className="text-base font-bold text-slate-900">Migrar Datos con Gemini IA</h3>
+                <h3 className="text-base font-bold text-slate-900">Migrar con IA</h3>
               </div>
               <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); }}><X className="w-5 h-5" /></button>
             </div>
-
             {!migrationData ? (
               <div className="space-y-4">
-                <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-500 transition-colors">
-                  <input type="file" id="file-upload-input" accept="application/pdf,image/*" className="hidden" onChange={e => setImportFile(e.target.files?.[0] || null)} />
-                  <label htmlFor="file-upload-input" className="cursor-pointer flex flex-col items-center gap-1.5">
-                    <UploadCloud className="w-8 h-8 text-indigo-500" />
-                    <span className="text-xs font-semibold text-slate-700">{importFile ? `Archivo: ${importFile.name}` : 'Subir resumen o planilla en PDF / Imagen'}</span>
-                  </label>
-                </div>
-                <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="O pega filas de Google Sheets / Excel..." className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none font-mono" />
-                <button onClick={handleExecuteAIImport} disabled={uploading || (!importFile && !importText.trim())} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
-                  {uploading ? 'Gemini analizando...' : 'Analizar y Extraer Estructura'}
+                <input type="file" id="file-upload-input" accept="application/pdf,image/*" className="hidden" onChange={e => setImportFile(e.target.files?.[0] || null)} />
+                <label htmlFor="file-upload-input" className="cursor-pointer flex flex-col items-center gap-1.5 border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center">
+                  <UploadCloud className="w-8 h-8 text-indigo-500" />
+                  <span className="text-xs font-semibold text-slate-700">{importFile ? importFile.name : 'Subir resumen o planilla'}</span>
+                </label>
+                <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="O pega filas de Excel..." className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none font-mono" />
+                <button onClick={handleExecuteAIImport} disabled={uploading || (!importFile && !importText.trim())} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
+                  {uploading ? 'Gemini analizando...' : 'Analizar'}
                 </button>
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto space-y-4">
                 <div className="space-y-1.5">
-                  <span className="text-[11px] font-bold text-slate-700">Movimientos identificados ({migrationData.items?.length}):</span>
                   {migrationData.items?.map((item: any, idx: number) => (
                     <div key={idx} className="flex justify-between items-center text-xs p-2 bg-slate-50 rounded-xl border border-slate-100">
                       <span>{item.description} ({item.date})</span>
@@ -1769,7 +1696,7 @@ export default function FinanzasDRMIA() {
                   ))}
                 </div>
                 <button onClick={handleConfirmMigration} disabled={isSavingBatch} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-3 rounded-xl cursor-pointer">
-                  Confirmar y Guardar en SaaS
+                  Confirmar y Guardar
                 </button>
               </div>
             )}
@@ -1777,12 +1704,11 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
-      {/* Modal: Auditoría de Pagos (Admin) */}
       {isAdminPanelOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-4xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos (Superusuario)</h3>
+              <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos</h3>
               <button onClick={() => setIsAdminPanelOpen(false)}><X className="w-5 h-5" /></button>
             </div>
             <div className="flex-1 overflow-y-auto space-y-3">

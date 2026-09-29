@@ -25,13 +25,21 @@ import {
   BarChart3, 
   Zap, 
   Check, 
-  MessageSquare,
-  UserPlus,
-  Send,
-  FileCheck,
-  AlertTriangle,
-  Lock,
-  Gift
+  MessageSquare, 
+  UserPlus, 
+  Send, 
+  FileCheck, 
+  AlertTriangle, 
+  Lock, 
+  Gift, 
+  Smartphone, 
+  TrendingUp, 
+  DollarSign, 
+  Download, 
+  Briefcase, 
+  User as UserIcon, 
+  BellRing, 
+  Calculator 
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -41,6 +49,12 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ff4d4f', '#13c2c2', '#faad14'];
 const ADMIN_EMAIL = 'drafaultimo@gmail.com';
 const TRIAL_DAYS = 10;
+
+// Precios de Lanzamiento con 40% OFF por 6 meses
+const PLAN_ESENCIAL_REGULAR = 12000;
+const PLAN_ESENCIAL_PROMO = 7200; // 40% OFF
+const PLAN_PRO_REGULAR = 24500;
+const PLAN_PRO_PROMO = 14700; // 40% OFF
 
 export default function FinanzasDRMIA() {
   const [viewMode, setViewMode] = useState<'landing' | 'app'>('landing');
@@ -55,23 +69,55 @@ export default function FinanzasDRMIA() {
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
 
-  // Estado del período de prueba y suscripción
+  // Período de prueba y suscripción
   const [isTrialActive, setIsTrialActive] = useState<boolean>(true);
   const [trialDaysLeft, setTrialDaysLeft] = useState<number>(TRIAL_DAYS);
   const [hasPaidPlan, setHasPaidPlan] = useState<boolean>(false);
   const [selectedPlanToPay, setSelectedPlanToPay] = useState<'base' | 'pro'>('pro');
 
-  // Comprobantes
-  const [receiptFile, setReceiptFile] = useState<File | null>(null);
-  const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
-  const [receiptFeedback, setReceiptFeedback] = useState<any>(null);
-  const [adminReceipts, setAdminReceipts] = useState<any[]>([]);
+  // PWA Prompt
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+
+  // Perfil Dual (Personal vs. Negocio/PyME) y Multimoneda
+  const [profileType, setProfileType] = useState<'personal' | 'business'>('personal');
+  const [currencyMode, setCurrencyMode] = useState<'ARS' | 'USD'>('ARS');
+  const usdRate = 1350; // Tipo de cambio referencial MEP
 
   // Datos financieros
   const [transactions, setTransactions] = useState<any[]>([]);
   const [creditCards, setCreditCards] = useState<any[]>([]);
   const [loans, setLoans] = useState<any[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
+
+  // Auditor Financiero con IA
+  const [aiDiagnosis, setAiDiagnosis] = useState<string>('');
+  const [isLoadingDiagnosis, setIsLoadingDiagnosis] = useState<boolean>(false);
+  const [isDiagnosisOpen, setIsDiagnosisOpen] = useState<boolean>(false);
+
+  // Simulador de Deudas (Bola de Nieve / Avalancha)
+  const [isSnowballModalOpen, setIsSnowballModalOpen] = useState(false);
+
+  // Chat interno y Superusuario
+  const [isChatModalOpen, setIsChatModalOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [newChatMessage, setNewChatMessage] = useState('');
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [totalAppUsersCount, setTotalAppUsersCount] = useState(0);
+  const [adminUsersList, setAdminUsersList] = useState<any[]>([]);
+  const [selectedChatUser, setSelectedChatUser] = useState<any>(null);
+
+  // Modales
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isCardModalOpen, setIsCardModalOpen] = useState(false);
+  const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+
+  // Comprobantes
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
+  const [receiptFeedback, setReceiptFeedback] = useState<any>(null);
+  const [adminReceipts, setAdminReceipts] = useState<any[]>([]);
 
   // Formulario manual
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
@@ -83,12 +129,6 @@ export default function FinanzasDRMIA() {
   const [selectedCardId, setSelectedCardId] = useState<string>('');
   const [selectedLoanId, setSelectedLoanId] = useState<string>('');
 
-  // Modales
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [isCardModalOpen, setIsCardModalOpen] = useState(false);
-  const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
-  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
-
   // Importador masivo IA
   const [importText, setImportText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -96,24 +136,46 @@ export default function FinanzasDRMIA() {
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [migrationData, setMigrationData] = useState<any>(null);
 
-  // Formulario tarjeta nueva
+  // Formulario tarjeta
   const [newCardName, setNewCardName] = useState('');
   const [newCardClosing, setNewCardClosing] = useState('20');
   const [newCardDue, setNewCardDue] = useState('5');
   const [newCardLimit, setNewCardLimit] = useState('');
 
-  // Formulario edición tarjeta
+  // Edición tarjeta
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [editCardName, setEditCardName] = useState('');
   const [editCardClosing, setEditCardClosing] = useState('20');
   const [editCardDue, setEditCardDue] = useState('5');
   const [editCardLimit, setEditCardLimit] = useState('');
 
+  // Listener PWA para instalar la app
+  useEffect(() => {
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBanner(true);
+    });
+  }, []);
+
+  function handleInstallApp() {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then(() => {
+        setDeferredPrompt(null);
+        setShowInstallBanner(false);
+      });
+    } else {
+      alert('Para instalar en iPhone/iPad: toca el botón Compartir y selecciona "Agregar al inicio". En Android/Chrome selecciona "Instalar aplicación".');
+    }
+  }
+
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         setUser(session.user);
         await evaluateAccessAndLoad(session.user);
+        await checkUnreadMessages(session.user);
       } else {
         setUser(null);
       }
@@ -133,6 +195,7 @@ export default function FinanzasDRMIA() {
       if (session?.user) {
         setUser(session.user);
         await evaluateAccessAndLoad(session.user);
+        await checkUnreadMessages(session.user);
       }
     } catch (err) {
       console.error(err);
@@ -141,17 +204,15 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  // Evaluación del período de 10 días gratis vs. plan pagado
   async function evaluateAccessAndLoad(currentUser: any) {
     if (currentUser.email === ADMIN_EMAIL) {
       setIsTrialActive(true);
       setHasPaidPlan(true);
-      await loadAdminReceipts();
+      await loadAdminMetrics();
       await refreshAll(currentUser.id);
       return;
     }
 
-    // 1. Cálculo de días desde el registro
     const createdAt = new Date(currentUser.created_at || new Date().toISOString());
     const now = new Date();
     const diffTime = Math.abs(now.getTime() - createdAt.getTime());
@@ -160,7 +221,6 @@ export default function FinanzasDRMIA() {
 
     setTrialDaysLeft(remainingDays);
 
-    // 2. Consulta si ya abonó un plan formal
     const { data: receipts } = await supabase
       .from('payment_receipts')
       .select('*')
@@ -175,11 +235,9 @@ export default function FinanzasDRMIA() {
       setHasPaidPlan(true);
       setIsTrialActive(false);
     } else if (remainingDays > 0) {
-      // Período de 10 días gratis activo
       setIsTrialActive(true);
       setHasPaidPlan(false);
     } else {
-      // Expiraron los 10 días (Día 11+)
       setIsTrialActive(false);
       setHasPaidPlan(false);
     }
@@ -191,12 +249,87 @@ export default function FinanzasDRMIA() {
     await refreshAll(currentUser.id);
   }
 
-  async function loadAdminReceipts() {
-    const { data } = await supabase
+  // Métricas de Superusuario Dionicio
+  async function loadAdminMetrics() {
+    const { data: receipts } = await supabase
       .from('payment_receipts')
       .select('*')
       .order('created_at', { ascending: false });
-    if (data) setAdminReceipts(data);
+    if (receipts) setAdminReceipts(receipts);
+
+    const { data: usersData } = await supabase
+      .from('payment_receipts')
+      .select('user_email, user_id')
+      .neq('user_email', ADMIN_EMAIL);
+
+    if (usersData) {
+      const uniqueUsers = Array.from(new Set(usersData.map(u => u.user_email)))
+        .map(email => usersData.find(u => u.user_email === email));
+      setAdminUsersList(uniqueUsers);
+      setTotalAppUsersCount(Math.max(uniqueUsers.length, 1));
+    }
+  }
+
+  // Notificación de mensajes no leídos
+  async function checkUnreadMessages(currentUser: any) {
+    const { data, count } = await supabase
+      .from('user_support_chats')
+      .select('*', { count: 'exact' })
+      .eq('receiver_email', currentUser.email)
+      .eq('is_read', false);
+
+    if (count !== null) setUnreadCount(count);
+  }
+
+  async function loadChatMessages(targetUserEmail?: string) {
+    if (!user) return;
+    const otherEmail = targetUserEmail || (user.email === ADMIN_EMAIL ? selectedChatUser?.user_email : ADMIN_EMAIL);
+    if (!otherEmail) return;
+
+    const { data } = await supabase
+      .from('user_support_chats')
+      .select('*')
+      .or(`and(sender_email.eq.${user.email},receiver_email.eq.${otherEmail}),and(sender_email.eq.${otherEmail},receiver_email.eq.${user.email})`)
+      .order('created_at', { ascending: true });
+
+    if (data) {
+      setChatMessages(data);
+      // Marcar como leídos
+      await supabase
+        .from('user_support_chats')
+        .update({ is_read: true })
+        .eq('receiver_email', user.email)
+        .eq('sender_email', otherEmail);
+      
+      setUnreadCount(0);
+    }
+  }
+
+  async function handleSendChatMessage(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newChatMessage.trim() || !user) return;
+
+    const receiverEmail = user.email === ADMIN_EMAIL ? selectedChatUser?.user_email : ADMIN_EMAIL;
+    if (!receiverEmail) {
+      alert('Selecciona un usuario para responder');
+      return;
+    }
+
+    const { error } = await supabase
+      .from('user_support_chats')
+      .insert([{
+        sender_id: user.id,
+        sender_email: user.email,
+        receiver_id: user.email === ADMIN_EMAIL ? selectedChatUser.user_id : user.id,
+        receiver_email: receiverEmail,
+        message: newChatMessage.trim(),
+        is_read: false
+      }]);
+
+    if (!error) {
+      setNewChatMessage('');
+      await loadChatMessages(receiverEmail);
+    }
   }
 
   async function handleAuth(e: React.FormEvent) {
@@ -215,6 +348,7 @@ export default function FinanzasDRMIA() {
         if (data?.user) {
           setUser(data.user);
           await evaluateAccessAndLoad(data.user);
+          await checkUnreadMessages(data.user);
           setViewMode('app');
         }
       } else {
@@ -223,7 +357,7 @@ export default function FinanzasDRMIA() {
           password: authPassword,
         });
         if (error) throw error;
-        setAuthSuccess('¡Cuenta creada exitosamente! Tenés 10 días gratis para probar todos los servicios.');
+        setAuthSuccess('¡Cuenta creada exitosamente! Tenés 10 días gratis con acceso completo.');
         setAuthMode('login');
       }
     } catch (err: any) {
@@ -248,18 +382,19 @@ export default function FinanzasDRMIA() {
       if (!res.ok) throw new Error(analysis.error || 'Error al validar');
 
       const isApproved = analysis.is_valid_transfer === true;
+      const amountPromo = selectedPlanToPay === 'pro' ? PLAN_PRO_PROMO : PLAN_ESENCIAL_PROMO;
 
       const { data: inserted, error: insertError } = await supabase
         .from('payment_receipts')
         .insert([{
           user_id: user.id,
           user_email: user.email,
-          amount: analysis.amount || (selectedPlanToPay === 'pro' ? 24500 : 12000),
+          amount: analysis.amount || amountPromo,
           transfer_date: analysis.transfer_date || new Date().toISOString().split('T')[0],
           sender_name: analysis.sender_name || 'No determinado',
           alias_destination: analysis.destination || 'drm-ia',
           ai_status: isApproved ? 'approved_by_ai' : 'rejected_by_ai',
-          ai_notes: `Plan solicitado: ${selectedPlanToPay.toUpperCase()}. Veredicto: ${analysis.reason || 'Sin detalles'}`,
+          ai_notes: `Plan: ${selectedPlanToPay.toUpperCase()} (Promo Lanzamiento 40% OFF). Veredicto: ${analysis.reason || 'Sin detalles'}`,
           admin_status: 'pending'
         }])
         .select()
@@ -270,9 +405,9 @@ export default function FinanzasDRMIA() {
       setReceiptFeedback(inserted);
       if (isApproved) {
         setHasPaidPlan(true);
-        alert('¡Comprobante aprobado con éxito por IA! Tu plan ha quedado activado.');
+        alert('¡Comprobante verificado con éxito por IA! Se aplicó tu bonificación del 40% por 6 meses.');
       } else {
-        alert('Comprobante recibido. La IA lo derivó a revisión para que Dionicio lo active manualmente.');
+        alert('Comprobante recibido. La IA lo derivó a revisión para que Dionicio lo apruebe manualmente.');
       }
     } catch (err: any) {
       alert('Error al enviar comprobante: ' + err.message);
@@ -289,8 +424,33 @@ export default function FinanzasDRMIA() {
       .eq('id', receiptId);
 
     if (!error) {
-      await loadAdminReceipts();
+      await loadAdminMetrics();
       alert(`Comprobante marcado como: ${status === 'verified' ? 'Verificado' : 'Rechazado'}`);
+    }
+  }
+
+  // Generador de Diagnóstico por IA
+  async function handleRunAIDiagnosis() {
+    setIsLoadingDiagnosis(true);
+    setIsDiagnosisOpen(true);
+    try {
+      const res = await fetch('/api/financial-audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          income: totalIncome,
+          expense: totalExpense,
+          debt: totalDebt,
+          transactions: filteredTransactions,
+          profileType: profileType === 'business' ? 'Comercio / PyME' : 'Personal'
+        })
+      });
+      const data = await res.json();
+      setAiDiagnosis(data.diagnosis || 'Auditoría completada.');
+    } catch (e: any) {
+      setAiDiagnosis('Error al contactar al motor de IA: ' + e.message);
+    } finally {
+      setIsLoadingDiagnosis(false);
     }
   }
 
@@ -318,7 +478,7 @@ export default function FinanzasDRMIA() {
     const payload = {
       user_id: user.id,
       amount: parseFloat(amount),
-      description,
+      description: profileType === 'business' ? `[NEGOCIO] ${description}` : description,
       type: transType,
       category: transType === 'expense' ? category : 'Ingreso',
       income_source: transType === 'income' ? incomeSource : null,
@@ -388,9 +548,7 @@ export default function FinanzasDRMIA() {
       setIsEditCardModalOpen(false);
       setEditingCardId(null);
       refreshAll(user.id);
-      alert('¡Tarjeta actualizada correctamente!');
-    } else {
-      alert('Error al actualizar tarjeta: ' + error.message);
+      alert('¡Tarjeta actualizada!');
     }
   }
 
@@ -438,19 +596,19 @@ export default function FinanzasDRMIA() {
     const currentSessionUser = sessionData?.session?.user || user;
 
     if (!currentSessionUser) {
-      alert('Tu sesión caducó o no estás conectado.');
+      alert('Tu sesión caducó.');
       return;
     }
 
-    if (!migrationData || !migrationData.items || migrationData.items.length === 0) {
-      alert('No se detectaron transacciones para guardar.');
+    if (!migrationData?.items?.length) {
+      alert('No hay movimientos detectados.');
       return;
     }
 
     setIsSavingBatch(true);
 
     try {
-      if (migrationData.detected_cards && migrationData.detected_cards.length > 0) {
+      if (migrationData.detected_cards?.length > 0) {
         const cardsToInsert = migrationData.detected_cards.map((c: any) => ({
           user_id: currentSessionUser.id,
           name: String(c.name || 'Tarjeta'),
@@ -461,7 +619,7 @@ export default function FinanzasDRMIA() {
         await supabase.from('credit_cards').insert(cardsToInsert);
       }
 
-      if (migrationData.detected_loans && migrationData.detected_loans.length > 0) {
+      if (migrationData.detected_loans?.length > 0) {
         const loansToInsert = migrationData.detected_loans.map((l: any) => ({
           user_id: currentSessionUser.id,
           entity: String(l.entity || 'Préstamo'),
@@ -476,16 +634,9 @@ export default function FinanzasDRMIA() {
 
       const today = new Date().toISOString().split('T')[0];
       const rows = migrationData.items.map((item: any) => {
-        let cleanAmount = 0;
-        if (typeof item.amount === 'number') {
-          cleanAmount = item.amount;
-        } else {
-          const strVal = String(item.amount || '0')
-            .replace(/\./g, '')
-            .replace(',', '.')
-            .replace(/[^0-9.-]+/g, '');
-          cleanAmount = parseFloat(strVal) || 0;
-        }
+        let cleanAmount = typeof item.amount === 'number' 
+          ? item.amount 
+          : parseFloat(String(item.amount || '0').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]+/g, '')) || 0;
 
         return {
           user_id: currentSessionUser.id,
@@ -501,47 +652,46 @@ export default function FinanzasDRMIA() {
       });
 
       const { error: txError } = await supabase.from('transactions').insert(rows);
-      if (txError) throw new Error('Supabase no aceptó los registros: ' + txError.message);
+      if (txError) throw txError;
 
       setIsImportModalOpen(false);
       setMigrationData(null);
       setImportText('');
       setImportFile(null);
       await refreshAll(currentSessionUser.id);
-      alert(`¡Éxito! Se importaron ${rows.length} registros financieros.`);
+      alert(`¡Éxito! Se importaron ${rows.length} registros.`);
     } catch (err: any) {
-      console.error(err);
-      alert('Aviso al guardar: ' + (err.message || 'Error de conexión'));
+      alert('Aviso al guardar: ' + err.message);
     } finally {
       setIsSavingBatch(false);
     }
   }
 
+  // Filtrado por Perfil (Personal vs. Negocio) y Mes
   const availableMonths = useMemo(() => {
     const monthsSet = new Set<string>();
     transactions.forEach(t => {
-      if (t.date && t.date.length >= 7) {
-        monthsSet.add(t.date.substring(0, 7));
-      }
+      if (t.date && t.date.length >= 7) monthsSet.add(t.date.substring(0, 7));
     });
     return Array.from(monthsSet).sort().reverse();
   }, [transactions]);
 
   const filteredTransactions = useMemo(() => {
-    if (selectedMonth === 'all') return transactions;
-    return transactions.filter(t => t.date && t.date.startsWith(selectedMonth));
-  }, [transactions, selectedMonth]);
+    return transactions.filter(t => {
+      const matchMonth = selectedMonth === 'all' || (t.date && t.date.startsWith(selectedMonth));
+      const isBusinessTx = t.description?.startsWith('[NEGOCIO]');
+      const matchProfile = profileType === 'business' ? isBusinessTx : !isBusinessTx;
+      return matchMonth && matchProfile;
+    });
+  }, [transactions, selectedMonth, profileType]);
 
+  // Cálculos Financieros y KPIs de Alto Valor
   const totalIncome = useMemo(() => {
-    return filteredTransactions
-      .filter(t => t.type === 'income')
-      .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+    return filteredTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + Number(t.amount || 0), 0);
   }, [filteredTransactions]);
 
   const totalExpense = useMemo(() => {
-    return filteredTransactions
-      .filter(t => t.type === 'expense')
-      .reduce((acc, t) => acc + Number(t.amount || 0), 0);
+    return filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + Number(t.amount || 0), 0);
   }, [filteredTransactions]);
 
   const netBalance = totalIncome - totalExpense;
@@ -549,6 +699,46 @@ export default function FinanzasDRMIA() {
   const totalDebt = useMemo(() => {
     return creditCards.reduce((acc, c) => acc + Number(c.credit_limit || 0), 0);
   }, [creditCards]);
+
+  // 1. Ratio de Endeudamiento sobre Ingresos
+  const debtRatio = useMemo(() => {
+    if (totalIncome <= 0) return 0;
+    return (totalDebt / totalIncome) * 100;
+  }, [totalDebt, totalIncome]);
+
+  // 2. Tasa de Ahorro Real (%)
+  const savingsRate = useMemo(() => {
+    if (totalIncome <= 0) return 0;
+    return ((totalIncome - totalExpense) / totalIncome) * 100;
+  }, [totalIncome, totalExpense]);
+
+  // 3. Gasto Diario Promedio
+  const dailyAverageExpense = useMemo(() => {
+    const now = new Date();
+    const currentDay = Math.max(now.getDate(), 1);
+    return totalExpense / currentDay;
+  }, [totalExpense]);
+
+  // 4. Días de Supervivencia / Fondo de Emergencia
+  const survivalDays = useMemo(() => {
+    if (dailyAverageExpense <= 0) return 999;
+    const availableCash = Math.max(netBalance, 0);
+    return Math.floor(availableCash / dailyAverageExpense);
+  }, [netBalance, dailyAverageExpense]);
+
+  // 5. Proyección de Gasto al Cierre de Mes
+  const projectedMonthEndExpense = useMemo(() => {
+    return dailyAverageExpense * 30;
+  }, [dailyAverageExpense]);
+
+  // Conversor Multimoneda Helper
+  function formatMoney(amountArs: number) {
+    if (currencyMode === 'USD') {
+      const usdValue = amountArs / usdRate;
+      return `US$ ${usdValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return `$ ${amountArs.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
 
   const expenseDataByCategory = useMemo(() => {
     return filteredTransactions
@@ -566,12 +756,18 @@ export default function FinanzasDRMIA() {
   }, [filteredTransactions]);
 
   // ==========================================
-  // RENDER: LANDING COMERCIAL DRMIA (10 DÍAS GRATIS)
+  // RENDER: LANDING PAGE DE VENTA CON PROMO 40% OFF
   // ==========================================
   if (viewMode === 'landing') {
     return (
       <div className="min-h-screen bg-[#08121f] text-slate-100 font-sans selection:bg-[#00D7FF] selection:text-[#0B192C]">
-        <nav className="max-w-6xl mx-auto px-6 py-6 flex justify-between items-center border-b border-slate-800/80">
+        {/* Banner Superior Promocional */}
+        <div className="bg-gradient-to-r from-[#00D7FF] via-cyan-500 to-blue-600 text-[#0B192C] py-2.5 px-4 text-center text-xs font-extrabold tracking-wide shadow-md flex items-center justify-center gap-2">
+          <Gift className="w-4 h-4 animate-bounce" />
+          <span>🔥 PROMO LANZAMIENTO EXCLUSIVA: 40% DE BONIFICACIÓN DURANTE 6 MESES EN TODOS LOS PLANES • 10 DÍAS DE PRUEBA COMPLETA GRATIS</span>
+        </div>
+
+        <nav className="max-w-6xl mx-auto px-6 py-5 flex justify-between items-center border-b border-slate-800/80">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 border border-[#00D7FF]/30 flex items-center justify-center text-[#00D7FF] font-bold text-xl shadow-[0_0_15px_rgba(0,215,255,0.2)]">
               ▲
@@ -584,7 +780,13 @@ export default function FinanzasDRMIA() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <button 
+              onClick={handleInstallApp}
+              className="hidden sm:flex text-xs font-bold bg-slate-800 border border-slate-700 text-[#00D7FF] px-3 py-2 rounded-xl hover:bg-slate-700 transition-colors items-center gap-1.5 cursor-pointer"
+            >
+              <Smartphone className="w-3.5 h-3.5" /> Descargar App Celular
+            </button>
             <button 
               onClick={() => { setAuthMode('login'); setViewMode('app'); }}
               className="text-xs font-semibold text-slate-300 hover:text-white px-3 py-2 transition-colors cursor-pointer"
@@ -593,17 +795,18 @@ export default function FinanzasDRMIA() {
             </button>
             <button 
               onClick={() => { setAuthMode('register'); setViewMode('app'); }}
-              className="text-xs font-semibold bg-[#00D7FF] text-[#0B192C] px-4 py-2.5 rounded-xl hover:bg-[#00B4D8] transition-all shadow-lg shadow-[#00D7FF]/10 flex items-center gap-1.5 cursor-pointer font-bold"
+              className="text-xs font-bold bg-[#00D7FF] text-[#0B192C] px-4 py-2.5 rounded-xl hover:bg-[#00B4D8] transition-all shadow-lg shadow-[#00D7FF]/20 flex items-center gap-1.5 cursor-pointer"
             >
               Probar 10 Días Gratis <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
         </nav>
 
-        <header className="max-w-4xl mx-auto px-6 pt-16 pb-14 text-center space-y-6">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0B192C] border border-[#00D7FF]/30 text-[#00D7FF] text-xs font-semibold shadow-sm">
-            <Gift className="w-3.5 h-3.5 text-[#00D7FF]" />
-            10 Días de Prueba Completa sin Cargo • Sin Tarjeta
+        {/* Hero Section */}
+        <header className="max-w-4xl mx-auto px-6 pt-14 pb-12 text-center space-y-6">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#0B192C] border border-[#00D7FF]/40 text-[#00D7FF] text-xs font-semibold shadow-sm">
+            <Sparkles className="w-3.5 h-3.5 text-[#00D7FF]" />
+            Auditoría Inteligente con Google Gemini 3.8 Flash • Descargable en tu Smartphone
           </div>
 
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-tight">
@@ -611,74 +814,62 @@ export default function FinanzasDRMIA() {
           </h1>
 
           <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto font-normal leading-relaxed">
-            Subí tus resúmenes o planillas y probá gratis todas las funciones durante 10 días. El día 11 elegís si continuás con el Plan Esencial o el Plan Pro IA.
+            Eliminá el caos de tus extractos y planillas. Nuestra IA clasifica tus consumos, proyecta tu salud patrimonial y diseña tu plan de desendeudamiento en segundos.
           </p>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
             <button 
               onClick={() => { setAuthMode('register'); setViewMode('app'); }}
               className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-sm hover:opacity-95 transition-all shadow-xl shadow-[#00D7FF]/20 flex items-center justify-center gap-2 cursor-pointer"
             >
-              Comenzar Prueba de 10 Días <ArrowRight className="w-4 h-4" />
+              Comenzar Prueba de 10 Días Gratis <ArrowRight className="w-4 h-4" />
             </button>
-            <a 
-              href="https://wa.me/5492966000000?text=Hola%20DRMIA,%20quiero%20conocer%20mas%20sobre%20el%20sistema%20de%20finanzas" 
-              target="_blank" 
-              rel="noreferrer"
-              className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#0B192C] border border-slate-700 text-slate-200 font-semibold text-sm hover:bg-[#132238] transition-all flex items-center justify-center gap-2 cursor-pointer"
+            <button 
+              onClick={handleInstallApp}
+              className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#0B192C] border border-[#00D7FF]/40 text-white font-semibold text-sm hover:bg-[#132238] transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
-              <MessageSquare className="w-4 h-4 text-[#00D7FF]" /> Hablar con Dionicio
-            </a>
+              <Smartphone className="w-4 h-4 text-[#00D7FF]" /> Descargar App en el Celular
+            </button>
           </div>
         </header>
 
-        {/* Pilares */}
-        <section className="max-w-6xl mx-auto px-6 py-16 border-t border-slate-800/80">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
-              <Zap className="w-6 h-6 text-[#00D7FF]" />
-              <h3 className="text-base font-bold text-white">Importador Inteligente IA</h3>
-              <p className="text-xs text-slate-400">Gemini 3.8 Flash interpreta extractos bancarios en PDF y Google Sheets al instante.</p>
-            </div>
-            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
-              <CreditCard className="w-6 h-6 text-[#00D7FF]" />
-              <h3 className="text-base font-bold text-white">Cierres y Vencimientos Reales</h3>
-              <p className="text-xs text-slate-400">Configurá las fechas exactas de cada entidad (BNA, Naranja X, Mercado Pago) y evitá sorpresas.</p>
-            </div>
-            <div className="bg-[#0B192C] p-6 rounded-2xl border border-slate-800 space-y-3">
-              <BarChart3 className="w-6 h-6 text-[#00D7FF]" />
-              <h3 className="text-base font-bold text-white">Control de Deuda y Flujo</h3>
-              <p className="text-xs text-slate-400">Filtrado mensual para evitar dobles cómputos y evaluar tu posición patrimonial real.</p>
-            </div>
-          </div>
-        </section>
-
-        {/* Tabla de Planes al Día 11 */}
+        {/* Planes con Bonificación del 40% durante 6 meses */}
         <section className="max-w-5xl mx-auto px-6 py-16 border-t border-slate-800/80">
           <div className="text-center max-w-xl mx-auto mb-12 space-y-2">
-            <h2 className="text-2xl md:text-3xl font-bold text-white">Probá todo 10 días. Decidí el día 11.</h2>
-            <p className="text-xs text-slate-400">Acceso total durante la prueba. Luego abonás por transferencia simple al alias <strong className="text-[#00D7FF]">drm-ia</strong>.</p>
+            <div className="inline-block bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[11px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider mb-2">
+              Oferta por Tiempo Limitado
+            </div>
+            <h2 className="text-2xl md:text-3xl font-bold text-white">Planes con 40% de Descuento por 6 Meses</h2>
+            <p className="text-xs text-slate-400">Probá todas las funciones gratis durante 10 días. El día 11 activás tu tarifa bonificada.</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
             {/* Plan Esencial */}
             <div className="bg-[#0B192C] p-8 rounded-3xl border border-slate-800 space-y-6 flex flex-col justify-between">
               <div className="space-y-4">
-                <h3 className="text-lg font-bold text-white">Plan Esencial</h3>
-                <p className="text-xs text-slate-400">Para control de gastos diarios y seguimiento personal estructurado.</p>
-                <div className="text-3xl font-extrabold text-white">$ 12.000 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-white">Plan Esencial</h3>
+                  <span className="text-[10px] bg-[#00D7FF]/10 text-[#00D7FF] font-bold px-2 py-0.5 rounded border border-[#00D7FF]/30">40% OFF x 6 MESES</span>
+                </div>
+                <p className="text-xs text-slate-400">Ideal para control presupuestario personal y seguimiento de tarjetas.</p>
                 
+                <div>
+                  <span className="text-xs text-slate-500 line-through mr-2">$ {PLAN_ESENCIAL_REGULAR.toLocaleString('es-AR')}</span>
+                  <span className="text-3xl font-extrabold text-white">$ {PLAN_ESENCIAL_PROMO.toLocaleString('es-AR')}</span>
+                  <span className="text-xs text-slate-400 font-normal"> / mes</span>
+                </div>
+
                 <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga manual ilimitada de ingresos y gastos</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Hasta 3 tarjetas de crédito con alertas de corte</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Gráfico mensual de gastos desglosados</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Auditoría de fechas de movimiento vs. carga</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga manual ilimitada de gastos e ingresos</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Hasta 3 tarjetas con fechas reales de corte</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Semáforo de endeudamiento y tasa de ahorro</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> App instalable en Android e iOS</li>
                 </ul>
               </div>
 
               <button 
                 onClick={() => { setAuthMode('register'); setViewMode('app'); }}
-                className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition-colors cursor-pointer"
+                className="w-full py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition-colors cursor-pointer"
               >
                 Probar 10 Días Gratis
               </button>
@@ -687,30 +878,38 @@ export default function FinanzasDRMIA() {
             {/* Plan Pro IA */}
             <div className="bg-[#132238] p-8 rounded-3xl border-2 border-[#00D7FF] space-y-6 flex flex-col justify-between relative shadow-2xl">
               <div className="absolute -top-3.5 right-6 bg-[#00D7FF] text-[#0B192C] text-[10px] font-extrabold uppercase px-3 py-1 rounded-full tracking-wider">
-                Recomendado
+                Recomendado • 40% OFF
               </div>
 
               <div className="space-y-4">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  Plan Pro IA <Sparkles className="w-4 h-4 text-[#00D7FF]" />
-                </h3>
-                <p className="text-xs text-slate-400">Automatización completa para comercios, profesionales y autónomos.</p>
-                <div className="text-3xl font-extrabold text-white">$ 24.500 <span className="text-xs text-slate-400 font-normal">/ mes</span></div>
-                
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    Plan Pro IA <Sparkles className="w-4 h-4 text-[#00D7FF]" />
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400">Automatización total para profesionales, comercios y PyMEs.</p>
+
+                <div>
+                  <span className="text-xs text-slate-500 line-through mr-2">$ {PLAN_PRO_REGULAR.toLocaleString('es-AR')}</span>
+                  <span className="text-3xl font-extrabold text-white">$ {PLAN_PRO_PROMO.toLocaleString('es-AR')}</span>
+                  <span className="text-xs text-slate-400 font-normal"> / mes</span>
+                </div>
+
                 <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Todo lo incluido en el Plan Esencial</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importaciones masivas ilimitadas con Gemini 3.8 Flash</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Detección automática de deudas, cuotas y resúmenes</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Tarjetas y préstamos ilimitados</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte prioritario vía WhatsApp con Dionicio</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importaciones masivas con Gemini 3.8 Flash</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Auditor Financiero IA ("Diagnóstico Mensual")</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Simulador de desendeudamiento Bola de Nieve</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Perfil dual: Caja Personal vs. Negocio / PyME</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte y chat directo con Dionicio</li>
                 </ul>
               </div>
 
               <button 
                 onClick={() => { setAuthMode('register'); setViewMode('app'); }}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-xs hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-[#00D7FF]/20"
+                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-xs hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-[#00D7FF]/20"
               >
-                Probar 10 Días Gratis
+                Activar con 40% OFF (10 Días Gratis)
               </button>
             </div>
           </div>
@@ -745,7 +944,7 @@ export default function FinanzasDRMIA() {
               {authMode === 'login' ? 'Ingresar a tu Cuenta' : 'Empezá tus 10 Días Gratis'}
             </h1>
             <p className="text-xs text-slate-400">
-              {authMode === 'login' ? 'Accedé a tu panel de finanzas' : 'Acceso completo e ilimitado por 10 días'}
+              {authMode === 'login' ? 'Accedé a tu panel de finanzas' : 'Acceso completo con 40% OFF garantizado'}
             </p>
           </div>
 
@@ -760,7 +959,7 @@ export default function FinanzasDRMIA() {
               onClick={() => { setAuthMode('register'); setAuthError(''); setAuthSuccess(''); }}
               className={`flex-1 py-2 rounded-lg font-semibold transition-all ${authMode === 'register' ? 'bg-[#00D7FF] text-[#0B192C]' : 'text-slate-400'}`}
             >
-              Crear Cuenta (10 Días Gratis)
+              Crear Cuenta
             </button>
           </div>
 
@@ -811,7 +1010,7 @@ export default function FinanzasDRMIA() {
   }
 
   // ==========================================
-  // RENDER: PANTALLA DE PAGO BLOQUEANTE (DÍA 11 EN ADELANTE)
+  // RENDER: PANTALLA DE PAGO BLOQUEANTE (DÍA 11 EN ADELANTE CON PROMO 40%)
   // ==========================================
   if (user && !isTrialActive && !hasPaidPlan) {
     return (
@@ -820,26 +1019,27 @@ export default function FinanzasDRMIA() {
           <div className="flex justify-between items-center border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2">
               <Lock className="w-5 h-5 text-[#00D7FF]" />
-              <h2 className="text-base font-bold text-white">Completaste tus 10 días gratis</h2>
+              <h2 className="text-base font-bold text-white">Completaste tus 10 días de prueba</h2>
             </div>
             <button onClick={() => supabase.auth.signOut()} className="text-xs text-rose-400 hover:underline">
               Cerrar Sesión
             </button>
           </div>
 
-          <p className="text-xs text-slate-300">
-            Tu período de prueba sin cargo finalizó. Para continuar utilizando tu panel con todos tus datos preservados, elegí tu plan y realizá la transferencia:
-          </p>
+          <div className="bg-rose-500/10 border border-rose-500/30 p-3 rounded-xl text-xs text-rose-300 font-semibold flex items-center gap-2">
+            <Gift className="w-4 h-4 text-rose-400 flex-shrink-0" />
+            ¡Tu beneficio de 40% OFF por 6 meses ya está aplicado en el precio a transferir!
+          </div>
 
-          {/* Selector de Plan a Pagar */}
+          {/* Selector de Plan con 40% OFF */}
           <div className="grid grid-cols-2 gap-3">
             <div 
               onClick={() => setSelectedPlanToPay('base')}
               className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedPlanToPay === 'base' ? 'bg-[#132238] border-[#00D7FF] shadow-lg shadow-[#00D7FF]/10' : 'bg-slate-900 border-slate-800 opacity-60'}`}
             >
-              <p className="text-xs font-bold text-white">Plan Esencial</p>
-              <p className="text-lg font-extrabold text-white mt-1">$ 12.000 <span className="text-[10px] font-normal text-slate-400">/ mes</span></p>
-              <p className="text-[10px] text-slate-400 mt-2">Carga manual y tarjetas</p>
+              <p className="text-xs font-bold text-white">Plan Esencial (40% OFF)</p>
+              <p className="text-xs text-slate-500 line-through mt-1">$ {PLAN_ESENCIAL_REGULAR.toLocaleString('es-AR')}</p>
+              <p className="text-lg font-extrabold text-white">$ {PLAN_ESENCIAL_PROMO.toLocaleString('es-AR')} <span className="text-[10px] font-normal text-slate-400">/ mes</span></p>
             </div>
 
             <div 
@@ -847,88 +1047,64 @@ export default function FinanzasDRMIA() {
               className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedPlanToPay === 'pro' ? 'bg-[#132238] border-[#00D7FF] shadow-lg shadow-[#00D7FF]/10' : 'bg-slate-900 border-slate-800 opacity-60'}`}
             >
               <div className="flex justify-between items-center">
-                <p className="text-xs font-bold text-white">Plan Pro IA</p>
+                <p className="text-xs font-bold text-white">Plan Pro IA (40% OFF)</p>
                 <Sparkles className="w-3.5 h-3.5 text-[#00D7FF]" />
               </div>
-              <p className="text-lg font-extrabold text-white mt-1">$ 24.500 <span className="text-[10px] font-normal text-slate-400">/ mes</span></p>
-              <p className="text-[10px] text-slate-400 mt-2">Importador Gemini y análisis ilimitado</p>
+              <p className="text-xs text-slate-500 line-through mt-1">$ {PLAN_PRO_REGULAR.toLocaleString('es-AR')}</p>
+              <p className="text-lg font-extrabold text-white">$ {PLAN_PRO_PROMO.toLocaleString('es-AR')} <span className="text-[10px] font-normal text-slate-400">/ mes</span></p>
             </div>
           </div>
 
           {/* Datos de Transferencia */}
           <div className="p-4 bg-[#132238] rounded-2xl border border-slate-700/80 space-y-2 text-xs">
-            <span className="font-bold text-white flex items-center gap-1.5">
-              <Landmark className="w-4 h-4 text-[#00D7FF]" /> Datos Bancarios para Transferencia
-            </span>
-            <p className="text-slate-300">Alias Oficial: <strong className="text-[#00D7FF] font-mono text-sm">drm-ia</strong></p>
-            <p className="text-slate-400">Titular: DRMIA • Dionicio Rafael Martin</p>
+            <p className="text-slate-300">Alias de Transferencia: <strong className="text-[#00D7FF] font-mono text-sm">drm-ia</strong></p>
+            <p className="text-slate-400">Titular: Dionicio Rafael Martin • DRMIA</p>
             <p className="text-slate-300">
-              Monto a transferir: <strong className="text-white text-sm">${selectedPlanToPay === 'pro' ? '24.500' : '12.000'}</strong>
+              Monto bonificado a transferir: <strong className="text-emerald-400 text-sm">${(selectedPlanToPay === 'pro' ? PLAN_PRO_PROMO : PLAN_ESENCIAL_PROMO).toLocaleString('es-AR')}</strong>
             </p>
           </div>
 
           {/* Chat de Validación IA */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[#00D7FF]" />
-              <h3 className="text-xs font-bold text-white">Chat de Validación con IA</h3>
+          <form onSubmit={handleUploadReceipt} className="space-y-3">
+            <div className="border-2 border-dashed border-slate-700 rounded-2xl p-4 text-center hover:border-[#00D7FF] transition-colors">
+              <input 
+                type="file" 
+                id="receipt-upload"
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={e => setReceiptFile(e.target.files?.[0] || null)}
+              />
+              <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-1.5">
+                <UploadCloud className="w-8 h-8 text-[#00D7FF]" />
+                <span className="text-xs font-semibold text-slate-300">
+                  {receiptFile ? `Archivo: ${receiptFile.name}` : 'Subir comprobante de transferencia al alias drm-ia'}
+                </span>
+              </label>
             </div>
-            <p className="text-xs text-slate-400">
-              Adjuntá el comprobante de transferencia al alias <strong className="text-white">drm-ia</strong>. La IA lo audita en segundos para reactivar tu cuenta.
-            </p>
 
-            <form onSubmit={handleUploadReceipt} className="space-y-3">
-              <div className="border-2 border-dashed border-slate-700 rounded-2xl p-5 text-center hover:border-[#00D7FF] transition-colors">
-                <input 
-                  type="file" 
-                  id="receipt-upload"
-                  accept="image/*,application/pdf"
-                  className="hidden"
-                  onChange={e => setReceiptFile(e.target.files?.[0] || null)}
-                />
-                <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-1.5">
-                  <UploadCloud className="w-8 h-8 text-[#00D7FF]" />
-                  <span className="text-xs font-semibold text-slate-300">
-                    {receiptFile ? `Archivo: ${receiptFile.name}` : 'Subir captura o PDF del comprobante'}
-                  </span>
-                  <span className="text-[10px] text-slate-500">Formatos JPG, PNG o PDF</span>
-                </label>
-              </div>
-
-              <button 
-                type="submit"
-                disabled={!receiptFile || isUploadingReceipt}
-                className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                {isUploadingReceipt ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                {isUploadingReceipt ? 'Gemini 3.8 Flash auditando comprobante...' : 'Enviar Comprobante a la IA'}
-              </button>
-            </form>
-
-            {receiptFeedback && (
-              <div className={`p-3 rounded-xl border text-xs space-y-1 ${receiptFeedback.ai_status === 'approved_by_ai' ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300' : 'bg-amber-950/40 border-amber-500/50 text-amber-300'}`}>
-                <p className="font-bold flex items-center gap-1">
-                  {receiptFeedback.ai_status === 'approved_by_ai' ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
-                  Estado IA: {receiptFeedback.ai_status === 'approved_by_ai' ? 'Comprobante Aprobado' : 'En Auditoría'}
-                </p>
-                <p className="text-[11px] text-slate-300">{receiptFeedback.ai_notes}</p>
-              </div>
-            )}
-          </div>
+            <button 
+              type="submit"
+              disabled={!receiptFile || isUploadingReceipt}
+              className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              {isUploadingReceipt ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {isUploadingReceipt ? 'Gemini 3.8 Flash auditando pago...' : 'Validar con IA y Reactivar Cuenta'}
+            </button>
+          </form>
         </div>
       </div>
     );
   }
 
   // ==========================================
-  // RENDER: PANEL OPERATIVO (DASHBOARD)
+  // RENDER: PANEL PRINCIPAL (DASHBOARD)
   // ==========================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Header con Indicador de Prueba de 10 Días */}
-        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
+        {/* Header con Perfil Dual, Multimoneda, Superusuario y Notificaciones */}
+        <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setViewMode('landing')}
@@ -938,88 +1114,148 @@ export default function FinanzasDRMIA() {
               ▲
             </button>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas SaaS</h1>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-xl font-bold text-slate-900">Panel de Finanzas DRMIA</h1>
                 {isTrialActive && !hasPaidPlan && (
                   <span className="bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1">
-                    <Gift className="w-3 h-3 text-amber-600" /> Prueba Gratis: {trialDaysLeft} días restantes
+                    <Gift className="w-3 h-3 text-amber-600" /> Prueba: {trialDaysLeft} días
                   </span>
                 )}
                 {hasPaidPlan && (
                   <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
-                    Plan Activo
+                    Plan Activo (40% OFF)
+                  </span>
+                )}
+                {user?.email === ADMIN_EMAIL && (
+                  <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-[10px] font-extrabold flex items-center gap-1">
+                    👑 SUPERUSUARIO • {totalAppUsersCount} Clientes en la App
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-                {user?.email}
-                {user?.email === ADMIN_EMAIL && (
-                  <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-[10px] font-bold">ADMINISTRADOR</span>
-                )}
-              </p>
+              <p className="text-xs text-slate-500 mt-0.5">{user?.email}</p>
             </div>
           </div>
           
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* Selector de Perfil (Personal vs. Negocio/PyME) */}
+            <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+              <button 
+                onClick={() => setProfileType('personal')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 cursor-pointer ${profileType === 'personal' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}
+              >
+                <UserIcon className="w-3.5 h-3.5" /> Personal
+              </button>
+              <button 
+                onClick={() => setProfileType('business')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1 cursor-pointer ${profileType === 'business' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}
+              >
+                <Briefcase className="w-3.5 h-3.5" /> Negocio / PyME
+              </button>
+            </div>
+
+            {/* Selector Multimoneda (ARS vs. USD MEP) */}
+            <button 
+              onClick={() => setCurrencyMode(prev => prev === 'ARS' ? 'USD' : 'ARS')}
+              className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 flex items-center gap-1 cursor-pointer"
+            >
+              <DollarSign className="w-3.5 h-3.5 text-emerald-600" /> {currencyMode}
+            </button>
+
+            {/* Chat Interno con Alerta de Mensajes No Leídos */}
+            <button 
+              onClick={() => { setIsChatModalOpen(true); loadChatMessages(); }}
+              className={`relative px-3 py-2 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors ${unreadCount > 0 ? 'bg-rose-600 text-white animate-pulse' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>Chat {user?.email === ADMIN_EMAIL ? 'Clientes' : 'con Dionicio'}</span>
+              {unreadCount > 0 && (
+                <span className="bg-white text-rose-600 text-[10px] font-extrabold px-1.5 py-0.2 rounded-full">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+
             {user?.email === ADMIN_EMAIL && (
               <button 
                 onClick={() => setIsAdminPanelOpen(true)}
                 className="bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer"
               >
-                <FileCheck className="w-4 h-4" /> Auditar Pagos ({adminReceipts.filter(r => r.admin_status === 'pending').length})
+                <FileCheck className="w-4 h-4" /> Pagos ({adminReceipts.filter(r => r.admin_status === 'pending').length})
               </button>
             )}
 
-            <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+            <div className="flex items-center gap-1 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200">
               <Calendar className="w-4 h-4 text-slate-500" />
               <select 
                 value={selectedMonth} 
                 onChange={(e) => setSelectedMonth(e.target.value)}
                 className="bg-transparent text-xs font-semibold text-slate-700 outline-none cursor-pointer"
               >
-                <option value="all">Ver Histórico Completo</option>
+                <option value="all">Ver Histórico</option>
                 {availableMonths.map(m => (
-                  <option key={m} value={m}>
-                    {m} ({new Date(m + '-02').toLocaleString('es-AR', { month: 'long', year: 'numeric' })})
-                  </option>
+                  <option key={m} value={m}>{m}</option>
                 ))}
               </select>
             </div>
 
             <button 
               onClick={() => setIsImportModalOpen(true)}
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white text-xs font-semibold px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+              className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1 cursor-pointer"
             >
-              <Sparkles className="w-4 h-4 text-cyan-200" />
-              Migrar con IA
+              <Sparkles className="w-4 h-4 text-cyan-200" /> Importar IA
             </button>
             <button 
               onClick={() => supabase.auth.signOut()} 
-              className="text-xs text-red-500 border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition-colors cursor-pointer"
+              className="text-xs text-red-500 border border-red-200 px-2.5 py-2 rounded-xl hover:bg-red-50 cursor-pointer"
             >
               Salir
             </button>
           </div>
         </header>
 
+        {/* Barra de Acceso Directo al Auditor IA y Simulador */}
+        <div className="bg-gradient-to-r from-[#0B192C] to-[#132238] p-4 rounded-2xl border border-slate-800 flex flex-wrap justify-between items-center gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-[#00D7FF]/10 text-[#00D7FF] flex items-center justify-center font-bold">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white">Auditor Financiero con Inteligencia Artificial</p>
+              <p className="text-[11px] text-slate-400">Diagnóstico mensual de gastos hormiga, orden de pago y optimización de caja</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setIsSnowballModalOpen(true)}
+              className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-700"
+            >
+              <Calculator className="w-3.5 h-3.5 text-[#00D7FF]" /> Plan Bola de Nieve
+            </button>
+            <button 
+              onClick={handleRunAIDiagnosis}
+              disabled={isLoadingDiagnosis}
+              className="bg-[#00D7FF] hover:bg-[#00B4D8] text-[#0B192C] text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-[#00D7FF]/20"
+            >
+              {isLoadingDiagnosis ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {isLoadingDiagnosis ? 'Gemini analizando...' : 'Generar Diagnóstico Mensual'}
+            </button>
+          </div>
+        </div>
+
         {/* Métricas Principales */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
-              <p className="text-xs text-slate-400">Ingresos ({selectedMonth === 'all' ? 'Histórico' : selectedMonth})</p>
-              <h3 className="text-xl font-bold text-emerald-600">
-                ${totalIncome.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-              </h3>
+              <p className="text-xs text-slate-400">Total Ingresos ({selectedMonth})</p>
+              <h3 className="text-xl font-bold text-emerald-600">{formatMoney(totalIncome)}</h3>
             </div>
             <ArrowUpCircle className="w-8 h-8 text-emerald-500 opacity-20" />
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
-              <p className="text-xs text-slate-400">Gastos ({selectedMonth === 'all' ? 'Histórico' : selectedMonth})</p>
-              <h3 className="text-xl font-bold text-rose-600">
-                ${totalExpense.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-              </h3>
+              <p className="text-xs text-slate-400">Total Gastos ({selectedMonth})</p>
+              <h3 className="text-xl font-bold text-rose-600">{formatMoney(totalExpense)}</h3>
             </div>
             <ArrowDownCircle className="w-8 h-8 text-rose-500 opacity-20" />
           </div>
@@ -1028,7 +1264,7 @@ export default function FinanzasDRMIA() {
             <div>
               <p className="text-xs text-slate-400">Superávit del Período</p>
               <h3 className={`text-xl font-bold ${netBalance >= 0 ? 'text-blue-600' : 'text-amber-600'}`}>
-                ${netBalance.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                {formatMoney(netBalance)}
               </h3>
             </div>
             <Wallet className="w-8 h-8 text-blue-500 opacity-20" />
@@ -1037,15 +1273,58 @@ export default function FinanzasDRMIA() {
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
               <p className="text-xs text-slate-400">Deuda Tarjetas Activa</p>
-              <h3 className="text-xl font-bold text-rose-700">
-                ${totalDebt.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-              </h3>
+              <h3 className="text-xl font-bold text-rose-700">{formatMoney(totalDebt)}</h3>
             </div>
             <CreditCard className="w-8 h-8 text-rose-600 opacity-20" />
           </div>
         </div>
 
-        {/* Tarjetas de Crédito */}
+        {/* NUEVAS MÉTRICAS FINANCIERAS (KPIS DE ALTO VALOR) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Ratio de Endeudamiento con Semáforo */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-slate-400">Ratio de Endeudamiento</span>
+              <span className={`w-3 h-3 rounded-full ${debtRatio < 30 ? 'bg-emerald-500' : debtRatio <= 50 ? 'bg-amber-500' : 'bg-rose-500'}`}></span>
+            </div>
+            <div className="text-2xl font-black text-slate-900">{debtRatio.toFixed(1)}%</div>
+            <p className="text-[10px] text-slate-400">
+              {debtRatio < 30 ? '🟢 Saludable (<30%)' : debtRatio <= 50 ? '🟡 Alerta (30-50%)' : '🔴 Crítico (>50%)'}
+            </p>
+          </div>
+
+          {/* Tasa de Ahorro Real */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-slate-400">Tasa de Ahorro Real</span>
+              <TrendingUp className="w-4 h-4 text-emerald-500" />
+            </div>
+            <div className="text-2xl font-black text-emerald-600">{savingsRate.toFixed(1)}%</div>
+            <p className="text-[10px] text-slate-400">Excedente neto sobre el ingreso total</p>
+          </div>
+
+          {/* Días de Supervivencia / Fondo de Emergencia */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-slate-400">Días de Supervivencia</span>
+              <Clock className="w-4 h-4 text-blue-500" />
+            </div>
+            <div className="text-2xl font-black text-blue-600">{survivalDays} días</div>
+            <p className="text-[10px] text-slate-400">Duración con saldo líquido actual</p>
+          </div>
+
+          {/* Gasto Diario y Proyección Fin de Mes */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-slate-400">Gasto Diario / Proyección</span>
+              <BarChart3 className="w-4 h-4 text-indigo-500" />
+            </div>
+            <div className="text-lg font-black text-slate-900">{formatMoney(dailyAverageExpense)}/día</div>
+            <p className="text-[10px] text-slate-400">Cierre estimado: {formatMoney(projectedMonthEndExpense)}</p>
+          </div>
+        </div>
+
+        {/* Tarjetas de Crédito y Préstamos */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
@@ -1069,18 +1348,10 @@ export default function FinanzasDRMIA() {
                     <div className="flex justify-between items-start">
                       <p className="text-xs font-bold text-slate-800 pr-12">{c.name}</p>
                       <div className="flex items-center gap-1">
-                        <button 
-                          onClick={() => openEditCard(c)}
-                          title="Modificar fecha de cierre y vencimiento"
-                          className="p-1 text-slate-400 hover:text-blue-600 hover:bg-white rounded transition-colors cursor-pointer"
-                        >
+                        <button onClick={() => openEditCard(c)} className="p-1 text-slate-400 hover:text-blue-600 rounded">
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
-                        <button 
-                          onClick={() => handleDeleteCard(c.id)}
-                          title="Eliminar tarjeta"
-                          className="p-1 text-slate-400 hover:text-red-500 hover:bg-white rounded transition-colors cursor-pointer"
-                        >
+                        <button onClick={() => handleDeleteCard(c.id)} className="p-1 text-slate-400 hover:text-red-500 rounded">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -1089,7 +1360,7 @@ export default function FinanzasDRMIA() {
                       Cierre: <strong className="text-slate-700">Día {c.closing_day}</strong> • Vence: <strong className="text-slate-700">Día {c.due_day}</strong>
                     </p>
                     {c.credit_limit > 0 && (
-                      <p className="text-[10px] text-rose-600 font-semibold">Saldo Deuda: ${Number(c.credit_limit).toLocaleString('es-AR')}</p>
+                      <p className="text-[10px] text-rose-600 font-semibold">Deuda: {formatMoney(Number(c.credit_limit))}</p>
                     )}
                   </div>
                 ))}
@@ -1110,9 +1381,9 @@ export default function FinanzasDRMIA() {
                   <div key={l.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
                     <p className="text-xs font-bold text-slate-800">{l.entity}</p>
                     {l.installment_amount > 0 && (
-                      <p className="text-[10px] text-slate-500">Cuota: ${Number(l.installment_amount).toLocaleString('es-AR')}</p>
+                      <p className="text-[10px] text-slate-500">Cuota: {formatMoney(Number(l.installment_amount))}</p>
                     )}
-                    <p className="text-[10px] text-amber-600 font-semibold">Total: ${Number(l.total_amount).toLocaleString('es-AR')}</p>
+                    <p className="text-[10px] text-amber-600 font-semibold">Total: {formatMoney(Number(l.total_amount))}</p>
                   </div>
                 ))}
               </div>
@@ -1142,12 +1413,12 @@ export default function FinanzasDRMIA() {
 
             <form onSubmit={handleAddTransaction} className="space-y-3">
               <div>
-                <label className="text-xs text-slate-500">Descripción</label>
+                <label className="text-xs text-slate-500">Descripción ({profileType === 'business' ? 'Gasto del Comercio' : 'Personal'})</label>
                 <input 
                   type="text" 
                   value={description}
                   onChange={e => setDescription(e.target.value)}
-                  placeholder={transType === 'income' ? 'Ej: Sueldo mensual' : 'Ej: Compra supermercado'} 
+                  placeholder="Ej: Pago de mercadería o combustible" 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500"
                   required 
                 />
@@ -1172,75 +1443,27 @@ export default function FinanzasDRMIA() {
                     type="date" 
                     value={customDate}
                     onChange={e => setCustomDate(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500 bg-white"
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
                     required 
                   />
                 </div>
               </div>
 
-              {transType === 'expense' ? (
-                <>
-                  <div>
-                    <label className="text-xs text-slate-500">Rubro / Categoría</label>
-                    <select 
-                      value={category}
-                      onChange={e => setCategory(e.target.value)}
-                      className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
-                    >
-                      <option value="Supermercado">Supermercado</option>
-                      <option value="Servicios">Servicios / Facturas</option>
-                      <option value="Alimentos">Alimentos / Restaurantes</option>
-                      <option value="Transporte">Transporte / Combustible</option>
-                      <option value="Tarjeta de Crédito">Pago Tarjeta</option>
-                      <option value="Préstamos">Cuota Préstamo</option>
-                      <option value="Otros">Otros</option>
-                    </select>
-                  </div>
-
-                  {creditCards.length > 0 && (
-                    <div>
-                      <label className="text-xs text-slate-500">Asignar a Tarjeta (Opcional)</label>
-                      <select 
-                        value={selectedCardId}
-                        onChange={e => setSelectedCardId(e.target.value)}
-                        className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
-                      >
-                        <option value="">Ninguna / Gasto en Efectivo-Débito</option>
-                        {creditCards.map(c => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {loans.length > 0 && (
-                    <div>
-                      <label className="text-xs text-slate-500">Vincular a Préstamo (Opcional)</label>
-                      <select 
-                        value={selectedLoanId}
-                        onChange={e => setSelectedLoanId(e.target.value)}
-                        className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
-                      >
-                        <option value="">Ninguno</option>
-                        {loans.map(l => (
-                          <option key={l.id} value={l.id}>{l.entity}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </>
-              ) : (
+              {transType === 'expense' && (
                 <div>
-                  <label className="text-xs text-slate-500">Tipo de Ingreso</label>
+                  <label className="text-xs text-slate-500">Rubro</label>
                   <select 
-                    value={incomeSource}
-                    onChange={e => setIncomeSource(e.target.value)}
+                    value={category}
+                    onChange={e => setCategory(e.target.value)}
                     className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
                   >
-                    <option value="salary">Sueldo Fijo</option>
-                    <option value="freelance">Honorarios / Extras</option>
-                    <option value="business">Ventas Comercio</option>
-                    <option value="investments">Rendimientos / Inversiones</option>
+                    <option value="Supermercado">Supermercado</option>
+                    <option value="Servicios">Servicios / Facturas</option>
+                    <option value="Alimentos">Alimentos / Restaurantes</option>
+                    <option value="Transporte">Transporte / Combustible</option>
+                    <option value="Tarjeta de Crédito">Pago Tarjeta</option>
+                    <option value="Préstamos">Cuota Préstamo</option>
+                    <option value="Otros">Otros</option>
                   </select>
                 </div>
               )}
@@ -1255,37 +1478,23 @@ export default function FinanzasDRMIA() {
           </div>
 
           <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center gap-2 mb-2">
-              <BarChart3 className="w-4 h-4 text-blue-600" />
-              <h2 className="text-sm font-bold text-slate-900">
-                Gastos Desglosados por Rubro ({selectedMonth === 'all' ? 'Histórico' : selectedMonth})
-              </h2>
-            </div>
-            
+            <h2 className="text-sm font-bold text-slate-900 mb-2">Gastos Desglosados por Rubro ({selectedMonth})</h2>
             <div className="w-full h-64">
               {expenseDataByCategory.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie 
-                      data={expenseDataByCategory} 
-                      cx="50%" 
-                      cy="50%" 
-                      innerRadius={55} 
-                      outerRadius={80} 
-                      paddingAngle={5} 
-                      dataKey="value"
-                    >
+                    <Pie data={expenseDataByCategory} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={5} dataKey="value">
                       {expenseDataByCategory.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(value: any) => `$${Number(value).toLocaleString('es-AR')}`} />
+                    <Tooltip formatter={(value: any) => formatMoney(Number(value))} />
                     <Legend />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
                 <div className="h-full flex items-center justify-center text-xs text-slate-400">
-                  No hay gastos en este mes seleccionado
+                  Sin gastos registrados para este filtro
                 </div>
               )}
             </div>
@@ -1295,100 +1504,158 @@ export default function FinanzasDRMIA() {
         {/* Historial */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-sm font-bold text-slate-900">
-              Historial de Movimientos ({filteredTransactions.length} registros)
-            </h3>
-            <span className="text-[11px] text-slate-400">Mostrando: {selectedMonth}</span>
+            <h3 className="text-sm font-bold text-slate-900">Historial ({filteredTransactions.length} registros)</h3>
+            <button 
+              onClick={() => window.print()}
+              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-3 py-1.5 rounded-xl border border-slate-200 flex items-center gap-1.5 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" /> Exportar Informe Imprimible
+            </button>
           </div>
 
           <div className="space-y-2">
-            {filteredTransactions.map(t => {
-              const loadedDate = t.created_at ? new Date(t.created_at).toLocaleDateString('es-AR') : 'Fecha s/d';
-              return (
-                <div key={t.id} className="flex justify-between items-center p-3 rounded-xl border border-slate-50 hover:bg-slate-50/50">
-                  <div>
-                    <p className="text-xs font-semibold text-slate-800">{t.description}</p>
-                    <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                      <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-mono">
-                        📅 Fecha movimiento: {t.date}
-                      </span>
-                      <span className="text-[10px] text-slate-400 flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-slate-300" /> Cargado el: {loadedDate}
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        • {t.type === 'income' ? `Ingreso` : `Rubro: ${t.category}`}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {t.type === 'income' ? '+' : '-'}${Number(t.amount).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                    </span>
-                    <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500 cursor-pointer">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+            {filteredTransactions.map(t => (
+              <div key={t.id} className="flex justify-between items-center p-3 rounded-xl border border-slate-50 hover:bg-slate-50/50">
+                <div>
+                  <p className="text-xs font-semibold text-slate-800">{t.description}</p>
+                  <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
+                    <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
+                    <span>• {t.category}</span>
                   </div>
                 </div>
-              );
-            })}
+                <div className="flex items-center gap-3">
+                  <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {t.type === 'income' ? '+' : '-'}{formatMoney(Number(t.amount))}
+                  </span>
+                  <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500 cursor-pointer">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
       </div>
 
-      {/* Modal: Panel Maestro de Auditoría (Admin) */}
-      {isAdminPanelOpen && (
+      {/* MODAL: CHAT INTERNO EN TIEMPO REAL */}
+      {isChatModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-4xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col border border-slate-800">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <FileCheck className="w-5 h-5 text-purple-600" />
-                <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos y Comprobantes</h3>
+                <MessageSquare className="w-5 h-5 text-[#00D7FF]" />
+                <h3 className="text-base font-bold text-white">
+                  {user?.email === ADMIN_EMAIL ? `Chat con Clientes • (${adminUsersList.length} usuarios)` : 'Canal Directo con Dionicio (DRMIA)'}
+                </h3>
               </div>
-              <button onClick={() => setIsAdminPanelOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setIsChatModalOpen(false)} className="text-slate-400 hover:text-slate-200">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-3">
-              {adminReceipts.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center py-8">No hay comprobantes pendientes de auditoría.</p>
-              ) : (
-                adminReceipts.map(r => (
-                  <div key={r.id} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-slate-900">{r.user_email}</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${r.ai_status === 'approved_by_ai' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                          IA: {r.ai_status}
-                        </span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${r.admin_status === 'verified' ? 'bg-blue-100 text-blue-700' : 'bg-slate-200 text-slate-700'}`}>
-                          Admin: {r.admin_status}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-600">
-                        Monto: <strong>${Number(r.amount).toLocaleString('es-AR')}</strong> • Fecha: {r.transfer_date} • Pagador: {r.sender_name}
-                      </p>
-                      <p className="text-[11px] text-slate-400">{r.ai_notes}</p>
-                    </div>
+            {user?.email === ADMIN_EMAIL && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-slate-800">
+                <span className="text-xs text-slate-400 font-bold whitespace-nowrap">Seleccionar cliente:</span>
+                {adminUsersList.map(u => (
+                  <button 
+                    key={u.user_id}
+                    onClick={() => { setSelectedChatUser(u); loadChatMessages(u.user_email); }}
+                    className={`text-xs px-2.5 py-1 rounded-lg border whitespace-nowrap cursor-pointer ${selectedChatUser?.user_email === u.user_email ? 'bg-[#00D7FF] text-[#0B192C] font-bold border-[#00D7FF]' : 'bg-slate-900 border-slate-700 text-slate-300'}`}
+                  >
+                    {u.user_email}
+                  </button>
+                ))}
+              </div>
+            )}
 
-                    <div className="flex items-center gap-2">
-                      <button 
-                        onClick={() => handleVerifyByAdmin(r.id, 'verified')}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-xl font-semibold cursor-pointer"
-                      >
-                        Confirmar Pago
-                      </button>
-                      <button 
-                        onClick={() => handleVerifyByAdmin(r.id, 'rejected')}
-                        className="bg-rose-600 hover:bg-rose-700 text-white text-xs px-3 py-1.5 rounded-xl font-semibold cursor-pointer"
-                      >
-                        Rechazar
-                      </button>
+            <div className="flex-1 overflow-y-auto space-y-3 p-3 bg-[#08121f] rounded-2xl border border-slate-800/80 min-h-[280px]">
+              {chatMessages.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-10">No hay mensajes anteriores en este canal.</p>
+              ) : (
+                chatMessages.map(msg => (
+                  <div key={msg.id} className={`flex flex-col ${msg.sender_email === user?.email ? 'items-end' : 'items-start'}`}>
+                    <span className="text-[10px] text-slate-400 mb-0.5">{msg.sender_email}</span>
+                    <div className={`p-3 rounded-2xl text-xs max-w-[80%] ${msg.sender_email === user?.email ? 'bg-[#00D7FF] text-[#0B192C] font-medium' : 'bg-[#132238] text-white border border-slate-700'}`}>
+                      {msg.message}
                     </div>
                   </div>
                 ))
               )}
+            </div>
+
+            <form onSubmit={handleSendChatMessage} className="flex gap-2">
+              <input 
+                type="text" 
+                value={newChatMessage}
+                onChange={e => setNewChatMessage(e.target.value)}
+                placeholder="Escribe tu consulta o mensaje directo..."
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white outline-none focus:border-[#00D7FF]"
+              />
+              <button type="submit" className="bg-[#00D7FF] text-[#0B192C] font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1 cursor-pointer">
+                <Send className="w-3.5 h-3.5" /> Enviar
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DIAGNÓSTICO AUDITOR IA */}
+      {isDiagnosisOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col border border-slate-800">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-[#00D7FF]" />
+                <h3 className="text-base font-bold text-white">Auditoría Financiera Mensual por IA</h3>
+              </div>
+              <button onClick={() => setIsDiagnosisOpen(false)} className="text-slate-400 hover:text-slate-200">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 bg-[#132238] rounded-2xl border border-slate-700/80 text-xs text-slate-200 leading-relaxed font-sans whitespace-pre-line">
+              {isLoadingDiagnosis ? (
+                <div className="flex items-center justify-center py-12 gap-2 text-slate-400">
+                  <Loader2 className="w-5 h-5 animate-spin text-[#00D7FF]" />
+                  <span>Gemini 3.8 Flash auditando movimientos, tarjetas y flujo de caja...</span>
+                </div>
+              ) : (
+                aiDiagnosis
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SIMULADOR BOLA DE NIEVE / AVALANCHA */}
+      {isSnowballModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col border border-slate-800">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Calculator className="w-5 h-5 text-[#00D7FF]" />
+                <h3 className="text-base font-bold text-white">Plan de Desendeudamiento Bola de Nieve</h3>
+              </div>
+              <button onClick={() => setIsSnowballModalOpen(false)} className="text-slate-400 hover:text-slate-200">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <p>Tu deuda consolidada activa es de: <strong className="text-rose-400 text-sm">{formatMoney(totalDebt)}</strong></p>
+              <div className="p-4 bg-[#132238] rounded-2xl border border-slate-700 space-y-2">
+                <span className="font-bold text-[#00D7FF]">Orden recomendado de liquidación de pasivos:</span>
+                {creditCards.map((c, i) => (
+                  <div key={c.id} className="flex justify-between items-center p-2.5 bg-slate-900/80 rounded-xl border border-slate-800">
+                    <span>{i + 1}. {c.name} (Vence día {c.due_day})</span>
+                    <span className="font-bold text-rose-400">{formatMoney(Number(c.credit_limit))}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-400">
+                *Estrategia: Liquida primero el pasivo con saldo menor o vencimiento más inmediato, liberando flujo de caja para acelerar la cancelación de las siguientes deudas en cascada.
+              </p>
             </div>
           </div>
         </div>
@@ -1399,62 +1666,29 @@ export default function FinanzasDRMIA() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-900">Editar Tarjeta de Crédito</h3>
-              <button onClick={() => setIsEditCardModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
+              <h3 className="text-sm font-bold text-slate-900">Editar Tarjeta</h3>
+              <button onClick={() => setIsEditCardModalOpen(false)}><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleUpdateCard} className="space-y-3">
               <div>
-                <label className="text-xs text-slate-500">Nombre de la Tarjeta</label>
-                <input 
-                  type="text" 
-                  value={editCardName}
-                  onChange={e => setEditCardName(e.target.value)}
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                  required
-                />
+                <label className="text-xs text-slate-500">Nombre</label>
+                <input type="text" value={editCardName} onChange={e => setEditCardName(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-xs text-slate-500">Día de Cierre</label>
-                  <input 
-                    type="number" 
-                    min="1"
-                    max="31"
-                    value={editCardClosing}
-                    onChange={e => setEditCardClosing(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold text-blue-600"
-                    required
-                  />
+                  <input type="number" min="1" max="31" value={editCardClosing} onChange={e => setEditCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none text-blue-600 font-bold" required />
                 </div>
                 <div>
                   <label className="text-xs text-slate-500">Día de Vencimiento</label>
-                  <input 
-                    type="number" 
-                    min="1"
-                    max="31"
-                    value={editCardDue}
-                    onChange={e => setEditCardDue(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold text-slate-800"
-                    required
-                  />
+                  <input type="number" min="1" max="31" value={editCardDue} onChange={e => setEditCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
                 </div>
               </div>
               <div>
-                <label className="text-xs text-slate-500">Saldo Deuda / Límite ($)</label>
-                <input 
-                  type="number" 
-                  step="0.01"
-                  value={editCardLimit}
-                  onChange={e => setEditCardLimit(e.target.value)}
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                />
+                <label className="text-xs text-slate-500">Saldo Deuda ($)</label>
+                <input type="number" step="0.01" value={editCardLimit} onChange={e => setEditCardLimit(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
               </div>
-              <button 
-                type="submit" 
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors cursor-pointer"
-              >
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
                 Guardar Modificaciones
               </button>
             </form>
@@ -1462,68 +1696,34 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
-      {/* Modal: Crear Tarjeta Manual */}
+      {/* Modal: Crear Tarjeta */}
       {isCardModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-900">Nueva Tarjeta de Crédito</h3>
-              <button onClick={() => setIsCardModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
+              <h3 className="text-sm font-bold text-slate-900">Nueva Tarjeta</h3>
+              <button onClick={() => setIsCardModalOpen(false)}><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleCreateCard} className="space-y-3">
               <div>
-                <label className="text-xs text-slate-500">Nombre de la Tarjeta</label>
-                <input 
-                  type="text" 
-                  value={newCardName}
-                  onChange={e => setNewCardName(e.target.value)}
-                  placeholder="Ej: Visa Banco Nación / Master MP" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                  required
-                />
+                <label className="text-xs text-slate-500">Nombre</label>
+                <input type="text" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="Ej: Visa BNA / Master MP" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-xs text-slate-500">Día de Cierre</label>
-                  <input 
-                    type="number" 
-                    min="1"
-                    max="31"
-                    value={newCardClosing}
-                    onChange={e => setNewCardClosing(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                    required
-                  />
+                  <label className="text-xs text-slate-500">Cierre</label>
+                  <input type="number" min="1" max="31" value={newCardClosing} onChange={e => setNewCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500">Día de Vencimiento</label>
-                  <input 
-                    type="number" 
-                    min="1"
-                    max="31"
-                    value={newCardDue}
-                    onChange={e => setNewCardDue(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                    required
-                  />
+                  <label className="text-xs text-slate-500">Vence</label>
+                  <input type="number" min="1" max="31" value={newCardDue} onChange={e => setNewCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
                 </div>
               </div>
               <div>
-                <label className="text-xs text-slate-500">Saldo o Límite ($)</label>
-                <input 
-                  type="number" 
-                  value={newCardLimit}
-                  onChange={e => setNewCardLimit(e.target.value)}
-                  placeholder="0.00" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none"
-                />
+                <label className="text-xs text-slate-500">Saldo Deuda ($)</label>
+                <input type="number" value={newCardLimit} onChange={e => setNewCardLimit(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
               </div>
-              <button 
-                type="submit" 
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors cursor-pointer"
-              >
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
                 Guardar Tarjeta
               </button>
             </form>
@@ -1540,102 +1740,65 @@ export default function FinanzasDRMIA() {
                 <Sparkles className="w-5 h-5 text-indigo-600" />
                 <h3 className="text-base font-bold text-slate-900">Migrar Datos con Gemini IA</h3>
               </div>
-              <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); }} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); }}><X className="w-5 h-5" /></button>
             </div>
 
             {!migrationData ? (
               <div className="space-y-4">
                 <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-500 transition-colors">
-                  <input 
-                    type="file" 
-                    id="file-upload-input"
-                    accept="application/pdf,image/*" 
-                    className="hidden" 
-                    onChange={e => setImportFile(e.target.files?.[0] || null)}
-                  />
+                  <input type="file" id="file-upload-input" accept="application/pdf,image/*" className="hidden" onChange={e => setImportFile(e.target.files?.[0] || null)} />
                   <label htmlFor="file-upload-input" className="cursor-pointer flex flex-col items-center gap-1.5">
                     <UploadCloud className="w-8 h-8 text-indigo-500" />
-                    <span className="text-xs font-semibold text-slate-700">
-                      {importFile ? `Archivo: ${importFile.name}` : 'Subir resumen o planilla en PDF / Imagen'}
-                    </span>
-                    <span className="text-[10px] text-slate-400">La IA extraerá tarjetas, deudas y consumos</span>
+                    <span className="text-xs font-semibold text-slate-700">{importFile ? `Archivo: ${importFile.name}` : 'Subir resumen o planilla en PDF / Imagen'}</span>
                   </label>
                 </div>
-
-                <div className="text-center text-[11px] text-slate-400 font-semibold">— O PEGA EL TEXTO DE TU PLANILLA —</div>
-
-                <textarea 
-                  value={importText}
-                  onChange={e => setImportText(e.target.value)}
-                  placeholder="Pega aquí filas copiadas de Google Sheets o Excel, o texto libre..."
-                  className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none focus:border-indigo-500 font-mono"
-                />
-
-                <button 
-                  onClick={handleExecuteAIImport}
-                  disabled={uploading || (!importFile && !importText.trim())}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <Sparkles className="w-4 h-4 text-cyan-200" />
-                  {uploading ? 'Gemini está analizando y organizando...' : 'Analizar y Extraer Estructura Completa'}
+                <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="O pega filas de Google Sheets / Excel..." className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none font-mono" />
+                <button onClick={handleExecuteAIImport} disabled={uploading || (!importFile && !importText.trim())} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
+                  {uploading ? 'Gemini analizando...' : 'Analizar y Extraer Estructura'}
                 </button>
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto space-y-4">
-                <div className="p-3 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-2 text-xs">
-                  <span className="font-bold text-indigo-900">Entidades detectadas:</span>
-                  <div className="flex flex-wrap gap-2">
-                    {migrationData.detected_cards?.map((c: any, i: number) => (
-                      <span key={i} className="bg-white px-2.5 py-1 rounded-lg border border-indigo-200 text-indigo-800 font-semibold text-[11px] flex items-center gap-1">
-                        <CreditCard className="w-3 h-3 text-indigo-500" /> {c.name}
-                      </span>
-                    ))}
-                    {migrationData.detected_loans?.map((l: any, i: number) => (
-                      <span key={i} className="bg-white px-2.5 py-1 rounded-lg border border-amber-200 text-amber-800 font-semibold text-[11px] flex items-center gap-1">
-                        <Landmark className="w-3 h-3 text-amber-500" /> {l.entity}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
                 <div className="space-y-1.5">
                   <span className="text-[11px] font-bold text-slate-700">Movimientos identificados ({migrationData.items?.length}):</span>
                   {migrationData.items?.map((item: any, idx: number) => (
-                    <div key={idx} className="flex justify-between items-center text-xs p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                      <div>
-                        <p className="font-semibold text-slate-800">{item.description}</p>
-                        <span className="text-[10px] text-slate-400">
-                          {item.type === 'income' ? 'Ingreso' : 'Gasto'} • {item.category} • Fecha: {item.date}
-                        </span>
-                      </div>
-                      <span className={`font-bold ${item.type === 'income' ? 'text-emerald-600' : 'text-slate-900'}`}>
-                        ${Number(item.amount).toLocaleString('es-AR')}
-                      </span>
+                    <div key={idx} className="flex justify-between items-center text-xs p-2 bg-slate-50 rounded-xl border border-slate-100">
+                      <span>{item.description} ({item.date})</span>
+                      <span className="font-bold">${item.amount}</span>
                     </div>
                   ))}
                 </div>
-
-                <button 
-                  onClick={handleConfirmMigration}
-                  disabled={isSavingBatch}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
-                >
-                  {isSavingBatch ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin text-white" />
-                      <span>Guardando datos en Supabase... por favor espere</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Confirmar y Crear Todo en mi SaaS</span>
-                    </>
-                  )}
+                <button onClick={handleConfirmMigration} disabled={isSavingBatch} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-3 rounded-xl cursor-pointer">
+                  Confirmar y Guardar en SaaS
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Auditoría de Pagos (Admin) */}
+      {isAdminPanelOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-4xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos (Superusuario)</h3>
+              <button onClick={() => setIsAdminPanelOpen(false)}><X className="w-5 h-5" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-3">
+              {adminReceipts.map(r => (
+                <div key={r.id} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex justify-between items-center text-xs">
+                  <div>
+                    <p className="font-bold text-slate-900">{r.user_email} • ${r.amount}</p>
+                    <p className="text-slate-500">{r.ai_notes}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => handleVerifyByAdmin(r.id, 'verified')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Aprobar</button>
+                    <button onClick={() => handleVerifyByAdmin(r.id, 'rejected')} className="bg-rose-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Rechazar</button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

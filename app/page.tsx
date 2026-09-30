@@ -41,7 +41,9 @@ import {
   ListFilter,
   Eye,
   Save,
-  FileUp
+  FileUp,
+  Receipt,
+  CornerDownLeft
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -97,8 +99,9 @@ export default function FinanzasDRMIA() {
   // Edición Rápida de Transacciones
   const [editingTransaction, setEditingTransaction] = useState<any>(null);
   const [editTxType, setEditTxType] = useState<'income' | 'expense'>('income');
+  const [editTxOpType, setEditTxOpType] = useState<'purchase' | 'payment' | 'refund'>('purchase');
+  const [editTxCurrency, setEditTxCurrency] = useState<'ARS' | 'USD'>('ARS');
   const [editTxCategory, setEditTxCategory] = useState('Alimentos');
-  const [editTxIncomeSource, setEditTxIncomeSource] = useState('salary');
   const [editTxAmount, setEditTxAmount] = useState('');
   const [editTxDescription, setEditTxDescription] = useState('');
 
@@ -126,7 +129,7 @@ export default function FinanzasDRMIA() {
   const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
 
-  // Importador IA
+  // Importador IA enfocado
   const [targetEntityForImport, setTargetEntityForImport] = useState<{ type: 'card' | 'loan', id: string, name: string } | null>(null);
   const [importText, setImportText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -134,17 +137,19 @@ export default function FinanzasDRMIA() {
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [migrationData, setMigrationData] = useState<any>(null);
 
-  // Tarjetas
+  // Tarjetas manual
   const [newCardName, setNewCardName] = useState('');
   const [newCardClosing, setNewCardClosing] = useState('20');
   const [newCardDue, setNewCardDue] = useState('5');
-  const [newCardLimit, setNewCardLimit] = useState('');
+  const [newCardLimitArs, setNewCardLimitArs] = useState('');
+  const [newCardLimitUsd, setNewCardLimitUsd] = useState('');
 
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [editCardName, setEditCardName] = useState('');
   const [editCardClosing, setEditCardClosing] = useState('20');
   const [editCardDue, setEditCardDue] = useState('5');
-  const [editCardLimit, setEditCardLimit] = useState('');
+  const [editCardLimitArs, setEditCardLimitArs] = useState('');
+  const [editCardLimitUsd, setEditCardLimitUsd] = useState('');
 
   // Préstamos / Billeteras manual
   const [newLoanEntity, setNewLoanEntity] = useState('');
@@ -159,6 +164,7 @@ export default function FinanzasDRMIA() {
 
   // Formulario manual transacciones
   const [transType, setTransType] = useState<'income' | 'expense'>('expense');
+  const [manualCurrency, setManualCurrency] = useState<'ARS' | 'USD'>('ARS');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Alimentos');
@@ -452,7 +458,7 @@ export default function FinanzasDRMIA() {
         body: JSON.stringify({
           income: totalIncome,
           expense: totalExpense,
-          debt: totalDebt,
+          debt: totalDebtArs,
           transactions: filteredTransactions,
           profileType: profileType === 'business' ? 'Comercio / PyME' : 'Personal'
         })
@@ -490,6 +496,8 @@ export default function FinanzasDRMIA() {
     const payload = {
       user_id: user.id,
       amount: parseFloat(amount),
+      currency: manualCurrency,
+      operation_type: 'purchase',
       description: profileType === 'business' ? `[NEGOCIO] ${description}` : description,
       type: transType,
       category: transType === 'expense' ? category : 'Ingreso',
@@ -514,8 +522,9 @@ export default function FinanzasDRMIA() {
   function openEditTransaction(tx: any) {
     setEditingTransaction(tx);
     setEditTxType(tx.type);
+    setEditTxOpType(tx.operation_type || 'purchase');
+    setEditTxCurrency(tx.currency || 'ARS');
     setEditTxCategory(tx.category || 'Otros');
-    setEditTxIncomeSource(tx.income_source || 'salary');
     setEditTxAmount(String(tx.amount || '0'));
     setEditTxDescription(tx.description || '');
   }
@@ -528,8 +537,9 @@ export default function FinanzasDRMIA() {
       description: editTxDescription,
       amount: parseFloat(editTxAmount) || 0,
       type: editTxType,
-      category: editTxType === 'expense' ? editTxCategory : 'Ingreso',
-      income_source: editTxType === 'income' ? editTxIncomeSource : null
+      operation_type: editTxOpType,
+      currency: editTxCurrency,
+      category: editTxType === 'expense' ? editTxCategory : 'Ingreso'
     };
 
     const { error } = await supabase
@@ -555,12 +565,15 @@ export default function FinanzasDRMIA() {
       name: newCardName,
       closing_day: parseInt(newCardClosing),
       due_day: parseInt(newCardDue),
-      credit_limit: parseFloat(newCardLimit || '0')
+      balance_ars: parseFloat(newCardLimitArs || '0'),
+      balance_usd: parseFloat(newCardLimitUsd || '0'),
+      credit_limit: parseFloat(newCardLimitArs || '0')
     }]);
 
     if (!error) {
       setNewCardName('');
-      setNewCardLimit('');
+      setNewCardLimitArs('');
+      setNewCardLimitUsd('');
       setIsCardModalOpen(false);
       refreshAll(user.id);
     }
@@ -595,7 +608,8 @@ export default function FinanzasDRMIA() {
     setEditCardName(card.name);
     setEditCardClosing(String(card.closing_day || '20'));
     setEditCardDue(String(card.due_day || '5'));
-    setEditCardLimit(String(card.credit_limit || '0'));
+    setEditCardLimitArs(String(card.balance_ars || card.credit_limit || '0'));
+    setEditCardLimitUsd(String(card.balance_usd || '0'));
     setIsEditCardModalOpen(true);
   }
 
@@ -609,7 +623,9 @@ export default function FinanzasDRMIA() {
         name: editCardName,
         closing_day: parseInt(editCardClosing),
         due_day: parseInt(editCardDue),
-        credit_limit: parseFloat(editCardLimit || '0')
+        balance_ars: parseFloat(editCardLimitArs || '0'),
+        balance_usd: parseFloat(editCardLimitUsd || '0'),
+        credit_limit: parseFloat(editCardLimitArs || '0')
       })
       .eq('id', editingCardId);
 
@@ -663,14 +679,12 @@ export default function FinanzasDRMIA() {
         });
       }
 
-      // Protección contra cortes de respuesta o timeouts
       const rawText = await res.text();
       let data: any = {};
-
       try {
         data = JSON.parse(rawText);
       } catch (_err) {
-        throw new Error('El servidor tardó demasiado en responder o devolvió una respuesta vacía. Reintenta la subida.');
+        throw new Error('El servidor tardó demasiado en responder. Reintenta la subida.');
       }
 
       if (!res.ok) {
@@ -697,7 +711,7 @@ export default function FinanzasDRMIA() {
             ...item,
             amount: cleanAmount,
             isDuplicate,
-            selectedCategory: item.category || (item.is_refund ? 'Otros' : 'Por Clasificar')
+            selectedCategory: item.category || (item.operation_type === 'refund' ? 'Otros' : 'Por Clasificar')
           };
         });
 
@@ -746,31 +760,28 @@ export default function FinanzasDRMIA() {
         return;
       }
 
+      let assignedCardId = targetEntityForImport?.type === 'card' ? targetEntityForImport.id : null;
       let assignedLoanId = targetEntityForImport?.type === 'loan' ? targetEntityForImport.id : null;
 
-      if (!targetEntityForImport && migrationData.entity_name) {
-        const entityName = migrationData.entity_name;
-        const existingLoan = loans.find(l => l.entity.toLowerCase().includes(entityName.toLowerCase()));
-        if (existingLoan) {
-          assignedLoanId = existingLoan.id;
-        } else {
-          const { data: newLoan } = await supabase.from('loans').insert([{
-            user_id: currentSessionUser.id,
-            entity: entityName,
-            total_amount: 0,
-            installment_amount: 0,
-            total_installments: 12,
-            paid_installments: 1,
-            due_day: 10
-          }]).select().single();
-          if (newLoan) assignedLoanId = newLoan.id;
-        }
+      // Si se extrajo el resumen de tarjeta, actualizar saldos bimonetarios de esa tarjeta
+      if (assignedCardId && (migrationData.total_ars !== undefined || migrationData.total_usd !== undefined)) {
+        await supabase
+          .from('credit_cards')
+          .update({
+            balance_ars: migrationData.total_ars ?? 0,
+            balance_usd: migrationData.total_usd ?? 0,
+            credit_limit: migrationData.total_ars ?? 0
+          })
+          .eq('id', assignedCardId);
       }
 
       const rows = validItems.map((item: any) => {
-        const isRefund = item.is_refund === true || item.type === 'income';
-        const finalCategory = isRefund 
-          ? 'Ingreso' 
+        const isOpRefund = item.operation_type === 'refund';
+        const isOpPayment = item.operation_type === 'payment';
+        const isIncomeType = isOpRefund || isOpPayment;
+
+        const finalCategory = isIncomeType 
+          ? 'Tarjeta de Crédito' 
           : (item.selectedCategory === 'Por Clasificar' ? 'Otros' : item.selectedCategory);
 
         return {
@@ -779,10 +790,12 @@ export default function FinanzasDRMIA() {
             ? `[USD] ${item.description}` 
             : item.description,
           amount: item.amount,
+          currency: item.currency || 'ARS',
+          operation_type: item.operation_type || 'purchase',
           category: finalCategory,
-          type: isRefund ? 'income' : 'expense',
-          income_source: isRefund ? 'reintegro' : null,
-          credit_card_id: targetEntityForImport?.type === 'card' ? targetEntityForImport.id : null,
+          type: isIncomeType ? 'income' : 'expense',
+          income_source: isOpRefund ? 'reintegro' : isOpPayment ? 'pago_tarjeta' : null,
+          credit_card_id: assignedCardId,
           loan_id: assignedLoanId,
           date: (item.date && item.date.length === 10) ? item.date : today,
           installment_number: Number(item.installment_number) || 1,
@@ -799,7 +812,7 @@ export default function FinanzasDRMIA() {
       setImportFile(null);
       setTargetEntityForImport(null);
       await refreshAll(currentSessionUser.id);
-      alert(`¡Éxito! Se incorporaron ${rows.length} movimientos nuevos sin duplicados.`);
+      alert(`¡Éxito! Se incorporaron ${rows.length} operaciones distinguiendo compras, pagos y reintegros.`);
     } catch (err: any) {
       alert('Error al guardar: ' + err.message);
     } finally {
@@ -838,14 +851,19 @@ export default function FinanzasDRMIA() {
 
   const netBalance = totalIncome - totalExpense;
 
-  const totalDebt = useMemo(() => {
-    return creditCards.reduce((acc, c) => acc + Number(c.credit_limit || 0), 0);
+  // Deuda total en Pesos y Dólares
+  const totalDebtArs = useMemo(() => {
+    return creditCards.reduce((acc, c) => acc + Number(c.balance_ars || c.credit_limit || 0), 0);
+  }, [creditCards]);
+
+  const totalDebtUsd = useMemo(() => {
+    return creditCards.reduce((acc, c) => acc + Number(c.balance_usd || 0), 0);
   }, [creditCards]);
 
   const debtRatio = useMemo(() => {
     if (totalIncome <= 0) return 0;
-    return (totalDebt / totalIncome) * 100;
-  }, [totalDebt, totalIncome]);
+    return (totalDebtArs / totalIncome) * 100;
+  }, [totalDebtArs, totalIncome]);
 
   const savingsRate = useMemo(() => {
     if (totalIncome <= 0) return 0;
@@ -868,12 +886,11 @@ export default function FinanzasDRMIA() {
     return dailyAverageExpense * 30;
   }, [dailyAverageExpense]);
 
-  function formatMoney(amountArs: number) {
-    if (currencyMode === 'USD') {
-      const usdValue = amountArs / usdRate;
-      return `US$ ${usdValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  function formatMoney(amountVal: number, curr: 'ARS' | 'USD' = 'ARS') {
+    if (curr === 'USD') {
+      return `u$s ${amountVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
-    return `$ ${amountArs.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `$ ${amountVal.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 
   const expenseDataByCategory = useMemo(() => {
@@ -945,15 +962,15 @@ export default function FinanzasDRMIA() {
         <header className="max-w-4xl mx-auto px-6 pt-14 pb-12 text-center space-y-6">
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#0B192C] border border-[#00D7FF]/40 text-[#00D7FF] text-xs font-semibold shadow-sm">
             <Sparkles className="w-3.5 h-3.5 text-[#00D7FF]" />
-            Auditoría Inteligente con Google Gemini 3.8 Flash • Descargable en tu Smartphone
+            Auditoría Bimonetaria Inteligente • Pesos y Dólares con Google Gemini 3.8 Flash
           </div>
 
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-tight">
-            Controlá tus finanzas, tarjetas y deudas con <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00D7FF] to-cyan-400">Inteligencia Artificial</span>
+            Controlá tus tarjetas en <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00D7FF] to-cyan-400">Pesos y Dólares</span> con Inteligencia Artificial
           </h1>
 
           <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto font-normal leading-relaxed">
-            Eliminá el caos de tus extractos y planillas. Nuestra IA clasifica tus consumos, detecta reintegros, proyecta tu salud patrimonial y diseña tu plan de desendeudamiento.
+            Importá extractos con compras, pagos y reintegros. Clasificación exacta en dos monedas y detección de saldos a favor sin duplicados.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
@@ -997,7 +1014,7 @@ export default function FinanzasDRMIA() {
                 </div>
                 <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga manual ilimitada de gastos e ingresos</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Hasta 3 tarjetas con fechas reales de corte</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Control bimonetario (Pesos y Dólares)</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Semáforo de endeudamiento y desglose de rubros</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> App instalable en Android e iOS</li>
                 </ul>
@@ -1026,8 +1043,8 @@ export default function FinanzasDRMIA() {
                 </div>
                 <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Todo lo incluido en el Plan Esencial</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador IA por tarjeta y billeteras digitales</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Detección de reintegros y filtro anti-duplicados</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador IA con detección de compras, pagos y reintegros</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Manejo independiente de saldos en ARS y USD</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Auditor Financiero IA ("Diagnóstico Mensual")</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Simulador Bola de Nieve para deudas</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte y chat directo con Dionicio</li>
@@ -1208,7 +1225,7 @@ export default function FinanzasDRMIA() {
             </div>
 
             <button 
-              type="submit"
+              type="submit" 
               disabled={!receiptFile || isUploadingReceipt}
               className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
             >
@@ -1410,8 +1427,13 @@ export default function FinanzasDRMIA() {
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
-              <p className="text-xs text-slate-400">Deuda Tarjetas Activa</p>
-              <h3 className="text-xl font-bold text-rose-700">{formatMoney(totalDebt)}</h3>
+              <p className="text-xs text-slate-400">Deuda Tarjetas (ARS / USD)</p>
+              <h3 className="text-lg font-bold text-rose-700">{formatMoney(totalDebtArs, 'ARS')}</h3>
+              {totalDebtUsd !== 0 && (
+                <p className={`text-xs font-bold ${totalDebtUsd < 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {formatMoney(totalDebtUsd, 'USD')} {totalDebtUsd < 0 ? '(A favor)' : ''}
+                </p>
+              )}
             </div>
             <CreditCard className="w-8 h-8 text-rose-600 opacity-20" />
           </div>
@@ -1458,9 +1480,9 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Tarjetas de Crédito y Billeteras Digitales */}
+        {/* Tarjetas de Crédito Bimonetarias y Billeteras Digitales */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Tarjetas */}
+          {/* Tarjetas con Saldo ARS y Saldo USD independientes */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -1478,37 +1500,51 @@ export default function FinanzasDRMIA() {
               <p className="text-xs text-slate-400">No tienes tarjetas registradas aún.</p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {creditCards.map(c => (
-                  <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-2 relative group flex flex-col justify-between">
-                    <div>
-                      <div className="flex justify-between items-start">
-                        <p className="text-xs font-bold text-slate-800 pr-12">{c.name}</p>
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => openEditCard(c)} className="p-1 text-slate-400 hover:text-blue-600 rounded">
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => handleDeleteCard(c.id)} className="p-1 text-slate-400 hover:text-red-500 rounded">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                {creditCards.map(c => {
+                  const hasUsd = Number(c.balance_usd || 0) !== 0;
+                  const isUsdNegative = Number(c.balance_usd || 0) < 0;
+
+                  return (
+                    <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-2 relative group flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-start">
+                          <p className="text-xs font-bold text-slate-800 pr-12">{c.name}</p>
+                          <div className="flex items-center gap-1">
+                            <button onClick={() => openEditCard(c)} className="p-1 text-slate-400 hover:text-blue-600 rounded">
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => handleDeleteCard(c.id)} className="p-1 text-slate-400 hover:text-red-500 rounded">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          Cierre: <strong className="text-slate-700">Día {c.closing_day}</strong> • Vence: <strong className="text-slate-700">Día {c.due_day}</strong>
+                        </p>
+                        
+                        {/* Saldos Bimonetarios */}
+                        <div className="mt-1 space-y-0.5 pt-1 border-t border-slate-100">
+                          <p className="text-[11px] font-bold text-rose-600">
+                            Deuda ARS: {formatMoney(Number(c.balance_ars || c.credit_limit || 0), 'ARS')}
+                          </p>
+                          {hasUsd && (
+                            <p className={`text-[11px] font-bold ${isUsdNegative ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              Saldo USD: {formatMoney(Number(c.balance_usd), 'USD')} {isUsdNegative ? '(A favor)' : ''}
+                            </p>
+                          )}
                         </div>
                       </div>
-                      <p className="text-[10px] text-slate-500 mt-0.5">
-                        Cierre: <strong className="text-slate-700">Día {c.closing_day}</strong> • Vence: <strong className="text-slate-700">Día {c.due_day}</strong>
-                      </p>
-                      {c.credit_limit > 0 && (
-                        <p className="text-[10px] text-rose-600 font-semibold mt-0.5">Deuda: {formatMoney(Number(c.credit_limit))}</p>
-                      )}
-                    </div>
 
-                    <button
-                      onClick={() => openImportForEntity('card', c.id, c.name)}
-                      className="w-full mt-2 py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                    >
-                      <FileUp className="w-3 h-3 text-indigo-600" />
-                      Importar Resumen del Mes
-                    </button>
-                  </div>
-                ))}
+                      <button
+                        onClick={() => openImportForEntity('card', c.id, c.name)}
+                        className="w-full mt-2 py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        <FileUp className="w-3 h-3 text-indigo-600" />
+                        Importar Resumen del Mes
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1580,7 +1616,7 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Formulario y Gráfico con Desglose Interactivo de Rubros */}
+        {/* Formulario de Carga Manual con Selector de Moneda */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
             <div className="flex bg-slate-100 p-1 rounded-xl">
@@ -1607,15 +1643,15 @@ export default function FinanzasDRMIA() {
                   type="text" 
                   value={description}
                   onChange={e => setDescription(e.target.value)}
-                  placeholder="Ej: Pago a proveedor o supermercado" 
+                  placeholder="Ej: Pago de cuota, supermercado o servicio digital" 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500" 
                   required 
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-slate-500">Monto ($)</label>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2">
+                  <label className="text-xs text-slate-500">Monto</label>
                   <input 
                     type="number" 
                     step="0.01" 
@@ -1627,6 +1663,20 @@ export default function FinanzasDRMIA() {
                   />
                 </div>
                 <div>
+                  <label className="text-xs text-slate-500">Moneda</label>
+                  <select 
+                    value={manualCurrency} 
+                    onChange={(e: any) => setManualCurrency(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-bold"
+                  >
+                    <option value="ARS">ARS ($)</option>
+                    <option value="USD">USD (u$s)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
                   <label className="text-xs text-slate-500">Fecha</label>
                   <input 
                     type="date" 
@@ -1635,6 +1685,19 @@ export default function FinanzasDRMIA() {
                     className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white" 
                     required 
                   />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Imputar a Tarjeta (opcional)</label>
+                  <select 
+                    value={selectedCardId} 
+                    onChange={e => setSelectedCardId(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white text-slate-700"
+                  >
+                    <option value="">Ninguna / Débito</option>
+                    {creditCards.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -1666,7 +1729,7 @@ export default function FinanzasDRMIA() {
                     <option value="salary">Sueldo Fijo</option>
                     <option value="freelance">Honorarios / Extras</option>
                     <option value="business">Ventas Comercio</option>
-                    <option value="reintegro">Reintegro / Devolución</option>
+                    <option value="reintegro">Reintegro / Nota de Crédito</option>
                     <option value="investments">Rendimientos / Inversiones</option>
                   </select>
                 </div>
@@ -1719,7 +1782,6 @@ export default function FinanzasDRMIA() {
               )}
             </div>
 
-            {/* Fila interactiva para ver el listado de cada rubro */}
             <div className="flex flex-wrap gap-2 pt-3 border-t border-slate-100">
               {expenseDataByCategory.map((entry: any, index: number) => (
                 <button
@@ -1750,38 +1812,131 @@ export default function FinanzasDRMIA() {
           </div>
 
           <div className="space-y-2">
-            {filteredTransactions.map(t => (
-              <div key={t.id} className="flex justify-between items-center p-3 rounded-xl border border-slate-50 hover:bg-slate-50/50">
-                <div>
-                  <p className="text-xs font-semibold text-slate-800">{t.description}</p>
-                  <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
-                    <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
-                    <span>• {t.type === 'income' ? `Ingreso (${t.income_source || 'general'})` : `Rubro: ${t.category}`}</span>
+            {filteredTransactions.map(t => {
+              const isPayment = t.operation_type === 'payment';
+              const isRefund = t.operation_type === 'refund';
+              const isUsd = t.currency === 'USD';
+
+              return (
+                <div key={t.id} className="flex justify-between items-center p-3 rounded-xl border border-slate-50 hover:bg-slate-50/50">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-semibold text-slate-800">{t.description}</p>
+                      {isRefund && (
+                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-1.5 py-0.2 rounded">
+                          Reintegro
+                        </span>
+                      )}
+                      {isPayment && (
+                        <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-1.5 py-0.2 rounded">
+                          Pago Tarjeta
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
+                      <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
+                      <span>• {t.category}</span>
+                      {isUsd && <span className="text-emerald-700 font-bold">• u$s Dólares</span>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {t.type === 'income' ? '+' : '-'}{formatMoney(Number(t.amount), isUsd ? 'USD' : 'ARS')}
+                    </span>
+                    <button 
+                      onClick={() => openEditTransaction(t)}
+                      title="Editar movimiento"
+                      className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500 cursor-pointer p-1">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {t.type === 'income' ? '+' : '-'}{formatMoney(Number(t.amount))}
-                  </span>
-                  <button 
-                    onClick={() => openEditTransaction(t)}
-                    title="Editar rubro, origen o monto"
-                    className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </button>
-                  <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500 cursor-pointer p-1">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
       </div>
 
-      {/* MODAL: AGREGAR BILLETERA / PRÉSTAMO MANUAL */}
+      {/* MODAL: EDITAR TARJETA CON SALDOS EN ARS Y USD */}
+      {isEditCardModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-900">Editar Tarjeta</h3>
+              <button onClick={() => setIsEditCardModalOpen(false)}><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleUpdateCard} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Nombre de la Tarjeta</label>
+                <input type="text" value={editCardName} onChange={e => setEditCardName(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-semibold" required />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-500">Día de Cierre</label>
+                  <input type="number" min="1" max="31" value={editCardClosing} onChange={e => setEditCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Día de Vencimiento</label>
+                  <input type="number" min="1" max="31" value={editCardDue} onChange={e => setEditCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Saldo / Deuda en Pesos (ARS $)</label>
+                <input type="number" step="0.01" value={editCardLimitArs} onChange={e => setEditCardLimitArs(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Saldo en Dólares (USD u$s - si es a favor poner negativo)</label>
+                <input type="number" step="0.01" value={editCardLimitUsd} onChange={e => setEditCardLimitUsd(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold text-emerald-700" />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar Modificaciones</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: NUEVA TARJETA BIMONETARIA */}
+      {isCardModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-900">Nueva Tarjeta de Crédito</h3>
+              <button onClick={() => setIsCardModalOpen(false)}><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleCreateCard} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Nombre</label>
+                <input type="text" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="Ej: Tarjeta Naranja X / Visa BNA" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-semibold" required />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-500">Cierre</label>
+                  <input type="number" min="1" max="31" value={newCardClosing} onChange={e => setNewCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Vencimiento</label>
+                  <input type="number" min="1" max="31" value={newCardDue} onChange={e => setNewCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Saldo Inicial en Pesos ($)</label>
+                <input type="number" step="0.01" value={newCardLimitArs} onChange={e => setNewCardLimitArs(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Saldo Inicial en Dólares (u$s - opcional)</label>
+                <input type="number" step="0.01" value={newCardLimitUsd} onChange={e => setNewCardLimitUsd(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar Tarjeta</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AGREGAR BILLETERA / PRÉSTAMO */}
       {isLoanModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
@@ -1796,7 +1951,7 @@ export default function FinanzasDRMIA() {
                   type="text" 
                   value={newLoanEntity} 
                   onChange={e => setNewLoanEntity(e.target.value)} 
-                  placeholder="Ej: Mercado Pago, Naranja X, Ualá, Préstamo BNA" 
+                  placeholder="Ej: Mercado Pago, Naranja X Cuenta, Ualá" 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-semibold" 
                   required 
                 />
@@ -1808,7 +1963,7 @@ export default function FinanzasDRMIA() {
                   step="0.01" 
                   value={newLoanTotal} 
                   onChange={e => setNewLoanTotal(e.target.value)} 
-                  placeholder="0.00 (si es billetera puedes dejar en 0)" 
+                  placeholder="0.00" 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" 
                 />
               </div>
@@ -1831,7 +1986,7 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
-      {/* MODAL IMPORTADOR CON REVISIÓN ANTI-DUPLICADOS Y SELECCIÓN DE RUBRO */}
+      {/* MODAL IMPORTADOR CON REVISIÓN DE COMPRAS, PAGOS Y REINTEGROS */}
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-3xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
@@ -1841,7 +1996,7 @@ export default function FinanzasDRMIA() {
                 <h3 className="text-base font-bold text-slate-900">
                   {targetEntityForImport 
                     ? `Importar Resumen del Mes: ${targetEntityForImport.name}` 
-                    : 'Importar Extracto o Planilla con IA'}
+                    : 'Importar Extracto con IA'}
                 </h3>
               </div>
               <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); setTargetEntityForImport(null); }}>
@@ -1869,29 +2024,53 @@ export default function FinanzasDRMIA() {
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto space-y-4">
+                {/* Resumen de totales detectados en el PDF */}
+                {(migrationData.total_ars !== undefined || migrationData.total_usd !== undefined) && (
+                  <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl text-xs flex justify-between items-center">
+                    <span className="font-bold text-indigo-950">Totales Liquidados en Resumen:</span>
+                    <div className="flex gap-4">
+                      {migrationData.total_ars !== undefined && (
+                        <span className="font-extrabold text-slate-900">Total ARS: {formatMoney(Number(migrationData.total_ars), 'ARS')}</span>
+                      )}
+                      {migrationData.total_usd !== undefined && (
+                        <span className={`font-extrabold ${Number(migrationData.total_usd) < 0 ? 'text-emerald-700' : 'text-slate-900'}`}>
+                          Total USD: {formatMoney(Number(migrationData.total_usd), 'USD')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
-                  <span className="font-semibold text-slate-700">Movimientos identificados: {migrationData.items?.length || 0}</span>
+                  <span className="font-semibold text-slate-700">Operaciones identificadas: {migrationData.items?.length || 0}</span>
                   <span className="text-emerald-700 font-bold">
-                    Nuevos a incorporar: {migrationData.items?.filter((i: any) => !i.isDuplicate).length || 0}
+                    Nuevas a incorporar: {migrationData.items?.filter((i: any) => !i.isDuplicate).length || 0}
                   </span>
                 </div>
 
                 <div className="space-y-2">
                   {migrationData.items?.map((item: any, idx: number) => {
                     const isDup = item.isDuplicate;
-                    const isRefund = item.is_refund === true || item.type === 'income';
+                    const isPayment = item.operation_type === 'payment';
+                    const isRefund = item.operation_type === 'refund';
+                    const isUsd = item.currency === 'USD';
 
                     return (
                       <div 
                         key={idx} 
-                        className={`p-3 rounded-xl border text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 ${isDup ? 'bg-slate-100 border-slate-200 opacity-60' : isRefund ? 'bg-emerald-50/60 border-emerald-200' : 'bg-white border-slate-200'}`}
+                        className={`p-3 rounded-xl border text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 ${isDup ? 'bg-slate-100 border-slate-200 opacity-60' : isRefund ? 'bg-emerald-50/60 border-emerald-200' : isPayment ? 'bg-blue-50/60 border-blue-200' : 'bg-white border-slate-200'}`}
                       >
                         <div className="space-y-0.5">
                           <div className="flex items-center gap-2">
                             <span className="font-semibold text-slate-900">{item.description}</span>
                             {isRefund && (
                               <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">
-                                Reintegro / Saldo a Favor
+                                Reintegro / Nota de Crédito
+                              </span>
+                            )}
+                            {isPayment && (
+                              <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                                Pago Realizado
                               </span>
                             )}
                             {isDup && (
@@ -1901,16 +2080,16 @@ export default function FinanzasDRMIA() {
                             )}
                           </div>
                           <p className="text-[10px] text-slate-400 font-mono">
-                            Fecha: {item.date} {item.currency === 'USD' ? '• En Dólares (USD)' : ''}
+                            Fecha: {item.date} {isUsd ? '• Moneda: Dólares (USD)' : '• Moneda: Pesos (ARS)'}
                           </p>
                         </div>
 
                         <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-                          <span className={`font-bold ${isRefund ? 'text-emerald-600' : 'text-slate-900'}`}>
-                            {isRefund ? '+' : '-'}${item.amount}
+                          <span className={`font-bold ${isRefund || isPayment ? 'text-emerald-600' : 'text-slate-900'}`}>
+                            {isRefund || isPayment ? '+' : '-'}{formatMoney(item.amount, isUsd ? 'USD' : 'ARS')}
                           </span>
 
-                          {!isRefund && (
+                          {item.operation_type === 'purchase' && (
                             <select 
                               value={item.selectedCategory} 
                               onChange={(e) => handleUpdatePreviewCategory(idx, e.target.value)}
@@ -1989,7 +2168,7 @@ export default function FinanzasDRMIA() {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="font-bold text-emerald-600 text-sm">
-                        +{formatMoney(Number(t.amount))}
+                        +{formatMoney(Number(t.amount), t.currency || 'ARS')}
                       </span>
                       <button 
                         onClick={() => openEditTransaction(t)}
@@ -2049,7 +2228,7 @@ export default function FinanzasDRMIA() {
                     </div>
                     <div className="flex items-center gap-2.5">
                       <span className="font-bold text-rose-600">
-                        -{formatMoney(Number(t.amount))}
+                        -{formatMoney(Number(t.amount), t.currency || 'ARS')}
                       </span>
                       <button 
                         onClick={() => openEditTransaction(t)}
@@ -2099,31 +2278,49 @@ export default function FinanzasDRMIA() {
                 />
               </div>
 
-              <div>
-                <label className="text-xs text-slate-500">Monto ($)</label>
-                <input 
-                  type="number" 
-                  step="0.01" 
-                  value={editTxAmount} 
-                  onChange={e => setEditTxAmount(e.target.value)} 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" 
-                  required 
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-500">Monto</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={editTxAmount} 
+                    onChange={e => setEditTxAmount(e.target.value)} 
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" 
+                    required 
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Moneda</label>
+                  <select 
+                    value={editTxCurrency} 
+                    onChange={(e: any) => setEditTxCurrency(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-bold"
+                  >
+                    <option value="ARS">ARS ($)</option>
+                    <option value="USD">USD (u$s)</option>
+                  </select>
+                </div>
               </div>
 
               <div>
-                <label className="text-xs text-slate-500">Tipo de Movimiento</label>
+                <label className="text-xs text-slate-500">Tipo de Operación</label>
                 <select 
-                  value={editTxType} 
-                  onChange={(e: any) => setEditTxType(e.target.value)} 
+                  value={editTxOpType} 
+                  onChange={(e: any) => {
+                    const op = e.target.value;
+                    setEditTxOpType(op);
+                    setEditTxType(op === 'purchase' ? 'expense' : 'income');
+                  }} 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
                 >
-                  <option value="income">Ingreso / Reintegro (+)</option>
-                  <option value="expense">Gasto (-)</option>
+                  <option value="purchase">Compra / Consumo (Gasto)</option>
+                  <option value="payment">Pago de Tarjeta (Ingreso/Cancelación)</option>
+                  <option value="refund">Reintegro / Nota de Crédito (Saldo a favor)</option>
                 </select>
               </div>
 
-              {editTxType === 'expense' ? (
+              {editTxType === 'expense' && (
                 <div>
                   <label className="text-xs text-slate-500">Cambiar Rubro</label>
                   <select 
@@ -2138,21 +2335,6 @@ export default function FinanzasDRMIA() {
                     <option value="Tarjeta de Crédito">Pago Tarjeta</option>
                     <option value="Préstamos">Cuota Préstamo</option>
                     <option value="Otros">Otros</option>
-                  </select>
-                </div>
-              ) : (
-                <div>
-                  <label className="text-xs text-slate-500">Origen del Ingreso</label>
-                  <select 
-                    value={editTxIncomeSource} 
-                    onChange={e => setEditTxIncomeSource(e.target.value)} 
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
-                  >
-                    <option value="salary">Sueldo Fijo</option>
-                    <option value="freelance">Honorarios / Extras</option>
-                    <option value="business">Ventas Comercio</option>
-                    <option value="reintegro">Reintegro / Devolución</option>
-                    <option value="investments">Rendimientos / Inversiones</option>
                   </select>
                 </div>
               )}
@@ -2276,13 +2458,13 @@ export default function FinanzasDRMIA() {
             </div>
 
             <div className="space-y-3 text-xs text-slate-300">
-              <p>Tu deuda consolidada activa es de: <strong className="text-rose-400 text-sm">{formatMoney(totalDebt)}</strong></p>
+              <p>Tu deuda consolidada activa es de: <strong className="text-rose-400 text-sm">{formatMoney(totalDebtArs, 'ARS')}</strong></p>
               <div className="p-4 bg-[#132238] rounded-2xl border border-slate-700 space-y-2">
                 <span className="font-bold text-[#00D7FF]">Orden recomendado de liquidación de pasivos:</span>
                 {creditCards.map((c, i) => (
                   <div key={c.id} className="flex justify-between items-center p-2.5 bg-slate-900/80 rounded-xl border border-slate-800">
                     <span>{i + 1}. {c.name} (Vence día {c.due_day})</span>
-                    <span className="font-bold text-rose-400">{formatMoney(Number(c.credit_limit))}</span>
+                    <span className="font-bold text-rose-400">{formatMoney(Number(c.balance_ars || c.credit_limit || 0), 'ARS')}</span>
                   </div>
                 ))}
               </div>
@@ -2291,47 +2473,7 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
-      {/* Modales auxiliares */}
-      {isEditCardModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-900">Editar Tarjeta</h3>
-              <button onClick={() => setIsEditCardModalOpen(false)}><X className="w-5 h-5" /></button>
-            </div>
-            <form onSubmit={handleUpdateCard} className="space-y-3">
-              <input type="text" value={editCardName} onChange={e => setEditCardName(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-              <div className="grid grid-cols-2 gap-2">
-                <input type="number" min="1" max="31" value={editCardClosing} onChange={e => setEditCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-                <input type="number" min="1" max="31" value={editCardDue} onChange={e => setEditCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-              </div>
-              <input type="number" step="0.01" value={editCardLimit} onChange={e => setEditCardLimit(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
-              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar</button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isCardModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-900">Nueva Tarjeta</h3>
-              <button onClick={() => setIsCardModalOpen(false)}><X className="w-5 h-5" /></button>
-            </div>
-            <form onSubmit={handleCreateCard} className="space-y-3">
-              <input type="text" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="Nombre tarjeta" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-              <div className="grid grid-cols-2 gap-2">
-                <input type="number" min="1" max="31" value={newCardClosing} onChange={e => setNewCardClosing(e.target.value)} placeholder="Día cierre" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-                <input type="number" min="1" max="31" value={newCardDue} onChange={e => setNewCardDue(e.target.value)} placeholder="Día vencimiento" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" required />
-              </div>
-              <input type="number" value={newCardLimit} onChange={e => setNewCardLimit(e.target.value)} placeholder="Límite o saldo" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
-              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar</button>
-            </form>
-          </div>
-        </div>
-      )}
-
+      {/* Panel Superusuario */}
       {isAdminPanelOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-4xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">

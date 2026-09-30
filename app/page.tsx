@@ -41,7 +41,8 @@ import {
   ListFilter,
   Eye,
   Save,
-  FileUp
+  FileUp,
+  HelpCircle
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -52,7 +53,6 @@ const COLORS = ['#FF8042', '#00C49F', '#0088FE', '#faad14', '#8884d8', '#ff4d4f'
 const ADMIN_EMAILS = ['drafaultimo@gmail.com', 'd_rafael_m@hotmail.com'];
 const TRIAL_DAYS = 10;
 
-// Precios de Lanzamiento
 const PLAN_ESENCIAL_REGULAR = 12000;
 const PLAN_ESENCIAL_PROMO = 7200;
 const PLAN_PRO_REGULAR = 24500;
@@ -126,8 +126,8 @@ export default function FinanzasDRMIA() {
   const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
 
-  // Importador masivo IA
-  const [targetCardForImport, setTargetCardForImport] = useState<any>(null);
+  // Importador IA enfocado a Tarjeta o Billetera
+  const [targetEntityForImport, setTargetEntityForImport] = useState<{ type: 'card' | 'loan', id: string, name: string } | null>(null);
   const [importText, setImportText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -602,9 +602,9 @@ export default function FinanzasDRMIA() {
     if (!error && user) refreshAll(user.id);
   }
 
-  // Abrir importador enfocado en una tarjeta específica
-  function openImportForCard(card: any) {
-    setTargetCardForImport(card);
+  // Abrir importador enfocado en Tarjeta o Billetera
+  function openImportForEntity(type: 'card' | 'loan', id: string, name: string) {
+    setTargetEntityForImport({ type, id, name });
     setMigrationData(null);
     setImportText('');
     setImportFile(null);
@@ -631,12 +631,50 @@ export default function FinanzasDRMIA() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error procesando datos con IA');
+
+      // Comprobar y marcar posibles duplicados contra transacciones existentes
+      if (data.items && Array.isArray(data.items)) {
+        const enrichedItems = data.items.map((item: any) => {
+          let cleanAmount = typeof item.amount === 'number' 
+            ? item.amount 
+            : parseFloat(String(item.amount || '0').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]+/g, '')) || 0;
+          
+          cleanAmount = Math.abs(cleanAmount);
+          const itemDate = item.date || '';
+          const itemDesc = (item.description || '').trim().toLowerCase();
+
+          // Comprobar coincidencia exacta en transactions
+          const isDuplicate = transactions.some(tx => 
+            tx.date === itemDate && 
+            Math.abs(Number(tx.amount)) === cleanAmount &&
+            (tx.description || '').trim().toLowerCase().includes(itemDesc.substring(0, 10))
+          );
+
+          return {
+            ...item,
+            amount: cleanAmount,
+            isDuplicate,
+            selectedCategory: item.category || (item.is_refund ? 'Otros' : 'Por Clasificar')
+          };
+        });
+
+        data.items = enrichedItems;
+      }
+
       setMigrationData(data);
     } catch (err: any) {
-      alert('Error al interpretar datos: ' + err.message);
+      alert('Error al interpretar extracto: ' + err.message);
     } finally {
       setUploading(false);
     }
+  }
+
+  // Modificar categoría directamente en el preview del modal de importación
+  function handleUpdatePreviewCategory(index: number, newCategory: string) {
+    if (!migrationData?.items) return;
+    const updated = [...migrationData.items];
+    updated[index].selectedCategory = newCategory;
+    setMigrationData({ ...migrationData, items: updated });
   }
 
   async function handleConfirmMigration() {
@@ -656,48 +694,35 @@ export default function FinanzasDRMIA() {
     setIsSavingBatch(true);
 
     try {
-      let assignedCardId = targetCardForImport ? targetCardForImport.id : null;
+      const today = new Date().toISOString().split('T')[0];
 
-      // Si es importación general (sin tarjeta fijada), verificar si las tarjetas detectadas ya existen antes de insertar
-      if (!targetCardForImport && migrationData.detected_cards?.length > 0) {
-        for (const c of migrationData.detected_cards) {
-          const cardName = String(c.name || 'Tarjeta').trim().toLowerCase();
-          // Buscar coincidencia en las tarjetas que ya tiene el usuario
-          const existingCard = creditCards.find(existing => 
-            existing.name.toLowerCase().includes(cardName) || cardName.includes(existing.name.toLowerCase())
-          );
+      // Filtrar los que no estén marcados como duplicados (o el usuario haya elegido incluir)
+      const validItems = migrationData.items.filter((item: any) => !item.isDuplicate);
 
-          if (existingCard) {
-            assignedCardId = existingCard.id;
-          } else {
-            // Si realmente no existe, se inserta
-            const { data: newInsertedCard } = await supabase.from('credit_cards').insert([{
-              user_id: currentSessionUser.id,
-              name: String(c.name || 'Tarjeta'),
-              closing_day: 20,
-              due_day: 5,
-              credit_limit: parseFloat(String(c.balance || '0').replace(/[^0-9.-]+/g, '')) || 0
-            }]).select().single();
-
-            if (newInsertedCard) assignedCardId = newInsertedCard.id;
-          }
-        }
+      if (validItems.length === 0) {
+        alert('Todos los movimientos ya se encontraban registrados en tu historial. No se agregaron duplicados.');
+        setIsImportModalOpen(false);
+        setIsSavingBatch(false);
+        return;
       }
 
-      const today = new Date().toISOString().split('T')[0];
-      const rows = migrationData.items.map((item: any) => {
-        let cleanAmount = typeof item.amount === 'number' 
-          ? item.amount 
-          : parseFloat(String(item.amount || '0').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]+/g, '')) || 0;
+      const rows = validItems.map((item: any) => {
+        const isRefund = item.is_refund === true || item.type === 'income';
+        const finalCategory = isRefund 
+          ? 'Ingreso' 
+          : (item.selectedCategory === 'Por Clasificar' ? 'Otros' : item.selectedCategory);
 
         return {
           user_id: currentSessionUser.id,
-          description: String(item.description || 'Movimiento importado'),
-          amount: Math.abs(cleanAmount),
-          category: item.category || (targetCardForImport ? 'Tarjeta de Crédito' : 'Otros'),
-          type: item.type === 'income' ? 'income' : 'expense',
-          income_source: item.type === 'income' ? 'salary' : null,
-          credit_card_id: targetCardForImport ? targetCardForImport.id : assignedCardId,
+          description: item.currency === 'USD' 
+            ? `[USD] ${item.description}` 
+            : item.description,
+          amount: item.amount,
+          category: finalCategory,
+          type: isRefund ? 'income' : 'expense',
+          income_source: isRefund ? 'reintegro' : null,
+          credit_card_id: targetEntityForImport?.type === 'card' ? targetEntityForImport.id : null,
+          loan_id: targetEntityForImport?.type === 'loan' ? targetEntityForImport.id : null,
           date: (item.date && item.date.length === 10) ? item.date : today,
           installment_number: Number(item.installment_number) || 1,
           total_installments: Number(item.total_installments) || 1
@@ -711,9 +736,9 @@ export default function FinanzasDRMIA() {
       setMigrationData(null);
       setImportText('');
       setImportFile(null);
-      setTargetCardForImport(null);
+      setTargetEntityForImport(null);
       await refreshAll(currentSessionUser.id);
-      alert(`¡Éxito! Se agregaron ${rows.length} movimientos a ${targetCardForImport ? targetCardForImport.name : 'tu panel'}.`);
+      alert(`¡Éxito! Se incorporaron ${rows.length} movimientos nuevos sin duplicados.`);
     } catch (err: any) {
       alert('Error al guardar: ' + err.message);
     } finally {
@@ -867,7 +892,7 @@ export default function FinanzasDRMIA() {
           </h1>
 
           <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto font-normal leading-relaxed">
-            Eliminá el caos de tus extractos y planillas. Nuestra IA clasifica tus consumos, proyecta tu salud patrimonial y diseña tu plan de desendeudamiento en segundos.
+            Eliminá el caos de tus extractos y planillas. Nuestra IA clasifica tus consumos, detecta reintegros, proyecta tu salud patrimonial y diseña tu plan de desendeudamiento.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
@@ -932,7 +957,7 @@ export default function FinanzasDRMIA() {
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
                   Plan Pro IA <Sparkles className="w-4 h-4 text-[#00D7FF]" />
                 </h3>
-                <p className="text-xs text-slate-400">Automatización total para profesionales, comercios y PyMEs.</p>
+                <p className="text-xs text-slate-400">Automatización total para profesionales, comercios y billeteras.</p>
                 <div>
                   <span className="text-xs text-slate-500 line-through mr-2">$ {PLAN_PRO_REGULAR.toLocaleString('es-AR')}</span>
                   <span className="text-3xl font-extrabold text-white">$ {PLAN_PRO_PROMO.toLocaleString('es-AR')}</span>
@@ -940,10 +965,10 @@ export default function FinanzasDRMIA() {
                 </div>
                 <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Todo lo incluido en el Plan Esencial</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importaciones masivas con Gemini 3.8 Flash</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador IA por tarjeta y billeteras digitales</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Detección de reintegros y filtro anti-duplicados</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Auditor Financiero IA ("Diagnóstico Mensual")</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Simulador Bola de Nieve para deudas</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Perfil dual: Caja Personal vs. Negocio / PyME</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte y chat directo con Dionicio</li>
                 </ul>
               </div>
@@ -1052,7 +1077,7 @@ export default function FinanzasDRMIA() {
   }
 
   // ==========================================
-  // RENDER: PANTALLA DE PAGO (NO APLICA AL SUPERUSUARIO)
+  // RENDER: PANTALLA DE PAGO
   // ==========================================
   if (user && !isSuperUser && !isTrialActive && !hasPaidPlan) {
     return (
@@ -1136,13 +1161,13 @@ export default function FinanzasDRMIA() {
   }
 
   // ==========================================
-  // RENDER: PANEL PRINCIPAL (DASHBOARD)
+  // RENDER: DASHBOARD
   // ==========================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Header con Perfil Dual, Multimoneda y Superusuario */}
+        {/* Header */}
         <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
           <div className="flex items-center gap-3">
             <button 
@@ -1243,7 +1268,7 @@ export default function FinanzasDRMIA() {
             </div>
 
             <button 
-              onClick={() => { setTargetCardForImport(null); setIsImportModalOpen(true); }}
+              onClick={() => { setTargetEntityForImport(null); setIsImportModalOpen(true); }}
               className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1 cursor-pointer"
             >
               <Sparkles className="w-4 h-4 text-cyan-200" /> Importar Inicial con IA
@@ -1265,7 +1290,7 @@ export default function FinanzasDRMIA() {
             </div>
             <div>
               <p className="text-xs font-bold text-white">Auditor Financiero con Inteligencia Artificial</p>
-              <p className="text-[11px] text-slate-400">Diagnóstico mensual de gastos hormiga, orden de liquidación de pasivos y optimización de caja</p>
+              <p className="text-[11px] text-slate-400">Diagnóstico mensual de gastos hormiga, orden de liquidación y optimización de caja</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -1286,7 +1311,7 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Métricas Principales (La tarjeta de Ingresos ahora es interactiva) */}
+        {/* Métricas Principales */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div 
             onClick={() => setIsIncomeModalOpen(true)}
@@ -1372,8 +1397,9 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Tarjetas de Crédito con Importación Individual */}
+        {/* Tarjetas de Crédito y Billeteras Digitales (Ambas con Importación con IA) */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Tarjetas */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -1413,9 +1439,8 @@ export default function FinanzasDRMIA() {
                       )}
                     </div>
 
-                    {/* Botón Importar Resumen Directo a Esta Tarjeta */}
                     <button
-                      onClick={() => openImportForCard(c)}
+                      onClick={() => openImportForEntity('card', c.id, c.name)}
                       className="w-full mt-2 py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
                     >
                       <FileUp className="w-3 h-3 text-indigo-600" />
@@ -1427,22 +1452,33 @@ export default function FinanzasDRMIA() {
             )}
           </div>
 
+          {/* Billeteras Digitales y Préstamos */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex items-center gap-2">
               <Landmark className="w-4 h-4 text-amber-600" />
               <h3 className="text-sm font-bold text-slate-900">Préstamos & Billeteras Digitales</h3>
             </div>
             {loans.length === 0 ? (
-              <p className="text-xs text-slate-400">No registras préstamos activos.</p>
+              <p className="text-xs text-slate-400">No registras billeteras o préstamos activos.</p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {loans.map(l => (
-                  <div key={l.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1">
-                    <p className="text-xs font-bold text-slate-800">{l.entity}</p>
-                    {l.installment_amount > 0 && (
-                      <p className="text-[10px] text-slate-500">Cuota: {formatMoney(Number(l.installment_amount))}</p>
-                    )}
-                    <p className="text-[10px] text-amber-600 font-semibold">Total: {formatMoney(Number(l.total_amount))}</p>
+                  <div key={l.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-2 flex flex-col justify-between">
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">{l.entity}</p>
+                      {l.installment_amount > 0 && (
+                        <p className="text-[10px] text-slate-500">Cuota: {formatMoney(Number(l.installment_amount))}</p>
+                      )}
+                      <p className="text-[10px] text-amber-600 font-semibold">Total: {formatMoney(Number(l.total_amount))}</p>
+                    </div>
+
+                    <button
+                      onClick={() => openImportForEntity('loan', l.id, l.entity)}
+                      className="w-full mt-2 py-1.5 px-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <FileUp className="w-3 h-3 text-amber-600" />
+                      Importar Movimientos del Mes
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1536,6 +1572,7 @@ export default function FinanzasDRMIA() {
                     <option value="salary">Sueldo Fijo</option>
                     <option value="freelance">Honorarios / Extras</option>
                     <option value="business">Ventas Comercio</option>
+                    <option value="reintegro">Reintegro / Devolución</option>
                     <option value="investments">Rendimientos / Inversiones</option>
                   </select>
                 </div>
@@ -1650,7 +1687,130 @@ export default function FinanzasDRMIA() {
 
       </div>
 
-      {/* MODAL: DESGLOSE COMPLETO DE INGRESOS */}
+      {/* MODAL IMPORTADOR CON REVISIÓN ANTI-DUPLICADOS Y SELECCIÓN DE RUBRO */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-3xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-base font-bold text-slate-900">
+                  {targetEntityForImport 
+                    ? `Importar Resumen del Mes: ${targetEntityForImport.name}` 
+                    : 'Migrar Datos con IA'}
+                </h3>
+              </div>
+              <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); setTargetEntityForImport(null); }}>
+                <X className="w-5 h-5 text-slate-400 hover:text-slate-600" />
+              </button>
+            </div>
+
+            {targetEntityForImport && (
+              <div className="bg-indigo-50 border border-indigo-200 p-3 rounded-xl text-xs text-indigo-900">
+                Los consumos se vincularán directamente a <strong>{targetEntityForImport.name}</strong> sin crear duplicados.
+              </div>
+            )}
+
+            {!migrationData ? (
+              <div className="space-y-4">
+                <input type="file" id="file-upload-input" accept="application/pdf,image/*" className="hidden" onChange={e => setImportFile(e.target.files?.[0] || null)} />
+                <label htmlFor="file-upload-input" className="cursor-pointer flex flex-col items-center gap-1.5 border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-500">
+                  <UploadCloud className="w-8 h-8 text-indigo-500" />
+                  <span className="text-xs font-semibold text-slate-700">{importFile ? importFile.name : 'Subir resumen en PDF o Imagen'}</span>
+                </label>
+                <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="O pega filas de texto..." className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none font-mono" />
+                <button onClick={handleExecuteAIImport} disabled={uploading || (!importFile && !importText.trim())} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
+                  {uploading ? 'Gemini analizando...' : 'Analizar Resumen'}
+                </button>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto space-y-4">
+                <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+                  <span className="font-semibold text-slate-700">Movimientos identificados: {migrationData.items?.length || 0}</span>
+                  <span className="text-emerald-700 font-bold">
+                    Nuevos a incorporar: {migrationData.items?.filter((i: any) => !i.isDuplicate).length || 0}
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {migrationData.items?.map((item: any, idx: number) => {
+                    const isDup = item.isDuplicate;
+                    const isRefund = item.is_refund === true || item.type === 'income';
+
+                    return (
+                      <div 
+                        key={idx} 
+                        className={`p-3 rounded-xl border text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 ${isDup ? 'bg-slate-100 border-slate-200 opacity-60' : isRefund ? 'bg-emerald-50/60 border-emerald-200' : 'bg-white border-slate-200'}`}
+                      >
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-slate-900">{item.description}</span>
+                            {isRefund && (
+                              <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                                Reintegro / Nota de Crédito
+                              </span>
+                            )}
+                            {isDup && (
+                              <span className="bg-slate-200 text-slate-700 text-[10px] font-semibold px-2 py-0.5 rounded">
+                                Ya registrado
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            Fecha: {item.date} {item.currency === 'USD' ? '• En Dólares (USD)' : ''}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+                          <span className={`font-bold ${isRefund ? 'text-emerald-600' : 'text-slate-900'}`}>
+                            {isRefund ? '+' : '-'}${item.amount}
+                          </span>
+
+                          {/* Selector de Rubro si está Por Clasificar o para cambiarlo */}
+                          {!isRefund && (
+                            <select 
+                              value={item.selectedCategory} 
+                              onChange={(e) => handleUpdatePreviewCategory(idx, e.target.value)}
+                              className={`text-xs border rounded-lg p-1.5 outline-none font-semibold ${item.selectedCategory === 'Por Clasificar' ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-slate-200 bg-white text-slate-700'}`}
+                            >
+                              <option value="Por Clasificar">⚠️ Por Clasificar</option>
+                              <option value="Servicios">Servicios / Facturas</option>
+                              <option value="Supermercado">Supermercado</option>
+                              <option value="Alimentos">Alimentos / Restaurantes</option>
+                              <option value="Transporte">Transporte / Combustible</option>
+                              <option value="Tarjeta de Crédito">Pago Tarjeta</option>
+                              <option value="Préstamos">Cuota Préstamo</option>
+                              <option value="Otros">Otros</option>
+                            </select>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 flex justify-end gap-2">
+                  <button 
+                    onClick={() => setMigrationData(null)}
+                    className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+                  >
+                    Volver a subir
+                  </button>
+                  <button 
+                    onClick={handleConfirmMigration} 
+                    disabled={isSavingBatch} 
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-5 py-2.5 rounded-xl cursor-pointer"
+                  >
+                    {isSavingBatch ? 'Guardando...' : 'Confirmar e Incorporar sin Duplicados'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DESGLOSE DE INGRESOS */}
       {isIncomeModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col border border-slate-100">
@@ -1666,10 +1826,7 @@ export default function FinanzasDRMIA() {
                   </p>
                 </div>
               </div>
-              <button 
-                onClick={() => setIsIncomeModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1"
-              >
+              <button onClick={() => setIsIncomeModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1732,10 +1889,7 @@ export default function FinanzasDRMIA() {
                   </p>
                 </div>
               </div>
-              <button 
-                onClick={() => setSelectedCategoryDetail(null)}
-                className="text-slate-400 hover:text-slate-600 p-1"
-              >
+              <button onClick={() => setSelectedCategoryDetail(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1779,7 +1933,7 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
-      {/* MODAL: EDITAR RUBRO, ORIGEN O DATOS DE TRANSACCIÓN */}
+      {/* MODAL: EDITAR RUBRO, ORIGEN O DATOS */}
       {editingTransaction && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-4 border border-slate-100">
@@ -1821,7 +1975,7 @@ export default function FinanzasDRMIA() {
                   onChange={(e: any) => setEditTxType(e.target.value)} 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
                 >
-                  <option value="income">Ingreso (+)</option>
+                  <option value="income">Ingreso / Reintegro (+)</option>
                   <option value="expense">Gasto (-)</option>
                 </select>
               </div>
@@ -1845,7 +1999,7 @@ export default function FinanzasDRMIA() {
                 </div>
               ) : (
                 <div>
-                  <label className="text-xs text-slate-500">Cambiar Origen de Ingreso</label>
+                  <label className="text-xs text-slate-500">Origen del Ingreso</label>
                   <select 
                     value={editTxIncomeSource} 
                     onChange={e => setEditTxIncomeSource(e.target.value)} 
@@ -1854,6 +2008,7 @@ export default function FinanzasDRMIA() {
                     <option value="salary">Sueldo Fijo</option>
                     <option value="freelance">Honorarios / Extras</option>
                     <option value="business">Ventas Comercio</option>
+                    <option value="reintegro">Reintegro / Devolución</option>
                     <option value="investments">Rendimientos / Inversiones</option>
                   </select>
                 </div>
@@ -2030,57 +2185,6 @@ export default function FinanzasDRMIA() {
               <input type="number" value={newCardLimit} onChange={e => setNewCardLimit(e.target.value)} placeholder="Límite o saldo" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
               <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar</button>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Importador (General o enfocado en una tarjeta) */}
-      {isImportModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-indigo-600" />
-                <h3 className="text-base font-bold text-slate-900">
-                  {targetCardForImport ? `Importar Resumen del Mes: ${targetCardForImport.name}` : 'Migrar Datos Iniciales con IA'}
-                </h3>
-              </div>
-              <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); setTargetCardForImport(null); }}><X className="w-5 h-5" /></button>
-            </div>
-
-            {targetCardForImport && (
-              <div className="bg-indigo-50 border border-indigo-200 p-3 rounded-xl text-xs text-indigo-900">
-                Los consumos extraídos se vincularán directamente a <strong>{targetCardForImport.name}</strong> sin crear tarjetas duplicadas.
-              </div>
-            )}
-
-            {!migrationData ? (
-              <div className="space-y-4">
-                <input type="file" id="file-upload-input" accept="application/pdf,image/*" className="hidden" onChange={e => setImportFile(e.target.files?.[0] || null)} />
-                <label htmlFor="file-upload-input" className="cursor-pointer flex flex-col items-center gap-1.5 border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-500">
-                  <UploadCloud className="w-8 h-8 text-indigo-500" />
-                  <span className="text-xs font-semibold text-slate-700">{importFile ? importFile.name : 'Subir resumen bancario o extracto'}</span>
-                </label>
-                <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="O pega filas de Excel o texto..." className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none font-mono" />
-                <button onClick={handleExecuteAIImport} disabled={uploading || (!importFile && !importText.trim())} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
-                  {uploading ? 'Gemini analizando...' : 'Analizar Resumen'}
-                </button>
-              </div>
-            ) : (
-              <div className="flex-1 overflow-y-auto space-y-4">
-                <div className="space-y-1.5">
-                  {migrationData.items?.map((item: any, idx: number) => (
-                    <div key={idx} className="flex justify-between items-center text-xs p-2 bg-slate-50 rounded-xl border border-slate-100">
-                      <span>{item.description} ({item.date})</span>
-                      <span className="font-bold">${item.amount}</span>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={handleConfirmMigration} disabled={isSavingBatch} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-3 rounded-xl cursor-pointer">
-                  Confirmar e Incorporar al Historial
-                </button>
-              </div>
-            )}
           </div>
         </div>
       )}

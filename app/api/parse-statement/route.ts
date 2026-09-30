@@ -3,114 +3,85 @@ import { GoogleGenAI } from '@google/genai';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
-// Helper para reintentar con backoff exponencial
-async function callGeminiWithRetry(contents: any[], retries = 3, delay = 2000): Promise<any> {
-  let lastError: any;
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents,
-        config: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-        },
-      });
-      return response;
-    } catch (err: any) {
-      lastError = err;
-      const isOverloaded =
-        err?.status === 503 ||
-        err?.message?.includes('503') ||
-        err?.message?.includes('high demand') ||
-        err?.message?.includes('UNAVAILABLE');
-
-      if (isOverloaded && attempt < retries - 1) {
-        console.warn(`[Gemini 503] Reintento ${attempt + 2}/${retries} en ${delay}ms...`);
-        await new Promise((res) => setTimeout(res, delay * (attempt + 1)));
-      } else {
-        throw err;
-      }
-    }
-  }
-  throw lastError;
-}
-
 export async function POST(req: NextRequest) {
   try {
+    let rawText = '';
     const contentType = req.headers.get('content-type') || '';
-    let contentsPayload: any[] = [];
 
-    const promptInstructions = `
-Extrae la información financiera esencial de este documento o texto.
-Responde ÚNICAMENTE un objeto JSON válido con esta estructura exacta, sin texto adicional:
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      const file = formData.get('file') as File | null;
+      if (!file) return NextResponse.json({ error: 'No se envió archivo' }, { status: 400 });
+
+      const arrayBuffer = await file.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const base64Data = buffer.toString('base64');
+      const mimeType = file.type || 'application/pdf';
+
+      const prompt = `
+Analiza este resumen bancario, de tarjeta de crédito o extracto de billetera digital (como Naranja X, Mercado Pago, BNA, etc.).
+Extrae TODOS los movimientos y transacciones en formato JSON estricto con las siguientes reglas:
+1. DETECCIÓN DE REINTEGROS / NOTAS DE CRÉDITO:
+   - Si un movimiento tiene signo negativo ("-"), dice "NOTA DE CREDITO", "REINTEGRO" o "DEVOLUCION", márcalo con type: "income", is_refund: true, y coloca la descripción indicando "[REINTEGRO]". Ejemplo: "NOTA DE CREDITO GOOGLE Google One".
+2. DETECCIÓN DE MONEDA:
+   - Si está en dólares (U$S / USD), indica currency: "USD", de lo contrario "ARS".
+3. CLASIFICACIÓN DE RUBRO INTELIGENTE:
+   - Asigna uno de: "Supermercado", "Servicios", "Alimentos", "Transporte", "Tarjeta de Crédito", "Préstamos", "Otros".
+   - Si el concepto es ambiguo o desconocido (ej: transferencias a particulares, códigos extraños o comercios no identificables), asigna EXACTAMENTE: "Por Clasificar".
+4. ESTRUCTURA DE RESPUESTA:
+Devuelve un JSON con:
 {
-  "detected_cards": [
-    { "name": "Nombre de la tarjeta", "balance": 0.0 }
-  ],
-  "detected_loans": [
-    { "entity": "Nombre del préstamo o banco", "total_amount": 0.0, "installment_amount": 0.0 }
-  ],
+  "entity_name": "Nombre de la tarjeta o billetera (ej: Naranja X, Banco Nación)",
+  "period": "Mes y año (ej: 2026-09)",
   "items": [
     {
       "date": "YYYY-MM-DD",
-      "description": "Detalle del consumo o ingreso",
-      "amount": 0.0,
-      "type": "income o expense",
-      "category": "Supermercado, Servicios, Alimentos, Transporte, Tarjeta de Crédito, Préstamos u Otros",
+      "description": "Texto del consumo o reintegro",
+      "amount": 1234.56,
+      "type": "expense" | "income",
+      "is_refund": false | true,
+      "currency": "ARS" | "USD",
+      "category": "Rubro detectado o Por Clasificar",
       "installment_number": 1,
       "total_installments": 1
     }
   ]
 }
-Reglas:
-- Los montos deben ser números flotantes limpios (positivos, sin signos ni comas de miles).
-- Si no figura fecha exacta, utiliza la fecha actual.
+No agregues formato markdown extra, solo el bloque JSON.
 `;
 
-    if (contentType.includes('application/json')) {
-      const body = await req.json();
-      if (!body.raw_text) {
-        return NextResponse.json({ error: 'No se envió texto para analizar' }, { status: 400 });
-      }
-      contentsPayload = [body.raw_text, promptInstructions];
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [
+          { text: prompt },
+          { inlineData: { mimeType, data: base64Data } }
+        ],
+        config: { temperature: 0.1 }
+      });
+
+      const cleanJson = (response.text || '{}').replace(/```json/g, '').replace(/```/g, '').trim();
+      return NextResponse.json(JSON.parse(cleanJson));
     } else {
-      const formData = await req.formData();
-      const file = formData.get('file') as File | null;
-      if (!file) {
-        return NextResponse.json({ error: 'No se envió archivo' }, { status: 400 });
-      }
+      const { raw_text } = await req.json();
+      rawText = raw_text || '';
 
-      const bytes = await file.arrayBuffer();
-      const base64Data = Buffer.from(bytes).toString('base64');
+      const prompt = `
+Analiza el siguiente texto de un extracto o planilla financiera y extrae los movimientos con las reglas de reintegros y rubro "Por Clasificar" cuando sea dudoso. Devuelve solo JSON.
+Texto:
+${rawText}
+`;
 
-      contentsPayload = [
-        {
-          inlineData: {
-            mimeType: file.type || 'application/pdf',
-            data: base64Data,
-          },
-        },
-        promptInstructions,
-      ];
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [prompt],
+        config: { temperature: 0.1 }
+      });
+
+      const cleanJson = (response.text || '{}').replace(/```json/g, '').replace(/```/g, '').trim();
+      return NextResponse.json(JSON.parse(cleanJson));
     }
-
-    const response = await callGeminiWithRetry(contentsPayload);
-    const textOutput = response.text || '{}';
-
-    // Limpieza de posibles bloques markdown que devuelva el modelo
-    const cleanedJson = textOutput
-      .replace(/```json/g, '')
-      .replace(/```/g, '')
-      .trim();
-
-    const parsedData = JSON.parse(cleanedJson);
-    return NextResponse.json(parsedData);
   } catch (error: any) {
-    console.error('Error procesando en parse-statement:', error);
-    return NextResponse.json(
-      { error: error?.message || 'Error al procesar el archivo con IA' },
-      { status: 500 }
-    );
+    console.error('Error procesando extracto:', error);
+    return NextResponse.json({ error: error.message || 'Error en IA' }, { status: 500 });
   }
 }

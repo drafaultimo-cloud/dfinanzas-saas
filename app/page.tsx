@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { 
   Sparkles, 
   CreditCard, 
@@ -47,11 +47,10 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const COLORS = ['#FF8042', '#00C49F', '#0088FE', '#faad14', '#8884d8', '#ff4d4f', '#13c2c2', '#a0d911'];
-// Cuentas superusuario con pase libre perpetuo
 const ADMIN_EMAILS = ['drafaultimo@gmail.com', 'd_rafael_m@hotmail.com'];
 const TRIAL_DAYS = 10;
 
-// Precios de Lanzamiento (40% OFF por 6 meses)
+// Precios Promocionales (40% OFF por 6 meses)
 const PLAN_ESENCIAL_REGULAR = 12000;
 const PLAN_ESENCIAL_PROMO = 7200;
 const PLAN_PRO_REGULAR = 24500;
@@ -154,10 +153,12 @@ export default function FinanzasDRMIA() {
   const isSuperUser = user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase());
 
   useEffect(() => {
-    window.addEventListener('beforeinstallprompt', (e) => {
+    const handlePrompt = (e: any) => {
       e.preventDefault();
       setDeferredPrompt(e);
-    });
+    };
+    window.addEventListener('beforeinstallprompt', handlePrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handlePrompt);
   }, []);
 
   function handleInstallApp() {
@@ -165,7 +166,7 @@ export default function FinanzasDRMIA() {
       deferredPrompt.prompt();
       deferredPrompt.userChoice.then(() => setDeferredPrompt(null));
     } else {
-      alert('En Android: toca los 3 puntos arriba a la derecha y presiona "Instalar y crear acceso directo". En iPhone: toca Compartir y selecciona "Agregar al inicio".');
+      alert('En Android: toca los 3 puntos arriba a la derecha y selecciona "Instalar y crear acceso directo". En iPhone: toca Compartir y selecciona "Agregar al inicio".');
     }
   }
 
@@ -204,7 +205,6 @@ export default function FinanzasDRMIA() {
   }
 
   async function evaluateAccessAndLoad(currentUser: any) {
-    // Si es superusuario, acceso libre total perpetuo
     if (ADMIN_EMAILS.includes(currentUser.email?.toLowerCase())) {
       setIsTrialActive(true);
       setHasPaidPlan(true);
@@ -258,12 +258,12 @@ export default function FinanzasDRMIA() {
 
     const { data: usersData } = await supabase
       .from('payment_receipts')
-      .select('user_email, user_id')
-      .not('user_email', 'in', `(${ADMIN_EMAILS.join(',')})`);
+      .select('user_email, user_id');
 
     if (usersData) {
-      const uniqueUsers = Array.from(new Set(usersData.map(u => u.user_email)))
-        .map(email => usersData.find(u => u.user_email === email));
+      const filtered = usersData.filter(u => u.user_email && !ADMIN_EMAILS.includes(u.user_email.toLowerCase()));
+      const uniqueUsers = Array.from(new Set(filtered.map(u => u.user_email)))
+        .map(email => filtered.find(u => u.user_email === email));
       setAdminUsersList(uniqueUsers);
       setTotalAppUsersCount(Math.max(uniqueUsers.length, 1));
     }
@@ -388,7 +388,7 @@ export default function FinanzasDRMIA() {
           sender_name: analysis.sender_name || 'No determinado',
           alias_destination: analysis.destination || 'drm-ia',
           ai_status: isApproved ? 'approved_by_ai' : 'rejected_by_ai',
-          ai_notes: `Plan: ${selectedPlanToPay.toUpperCase()} (Promo Lanzamiento 40% OFF). Veredicto: ${analysis.reason || 'Sin detalles'}`,
+          ai_notes: `Plan: ${selectedPlanToPay.toUpperCase()} (Promo 40% OFF). Veredicto: ${analysis.reason || 'Sin detalles'}`,
           admin_status: 'pending'
         }])
         .select()
@@ -399,9 +399,9 @@ export default function FinanzasDRMIA() {
       setReceiptFeedback(inserted);
       if (isApproved) {
         setHasPaidPlan(true);
-        alert('¡Comprobante verificado con éxito por IA! Se aplicó tu bonificación del 40% por 6 meses.');
+        alert('¡Comprobante verificado con éxito por IA! Se activó tu suscripción bonificada.');
       } else {
-        alert('Comprobante recibido. La IA lo derivó a revisión para aprobación manual.');
+        alert('Comprobante recibido. La IA lo derivó a revisión manual.');
       }
     } catch (err: any) {
       alert('Error al enviar comprobante: ' + err.message);
@@ -441,7 +441,7 @@ export default function FinanzasDRMIA() {
         })
       });
       const data = await res.json();
-      setAiDiagnosis(data.diagnosis || 'Auditoría completada.');
+      setAiDiagnosis(data.diagnosis || 'Auditoría completada sin observaciones.');
     } catch (e: any) {
       setAiDiagnosis('Error conectando con el auditor de IA: ' + e.message);
     } finally {
@@ -724,7 +724,6 @@ export default function FinanzasDRMIA() {
     return `$ ${amountArs.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 
-  // Agrupamiento por Rubro
   const expenseDataByCategory = useMemo(() => {
     return filteredTransactions
       .filter(t => t.type === 'expense')
@@ -740,7 +739,6 @@ export default function FinanzasDRMIA() {
       }, []);
   }, [filteredTransactions]);
 
-  // Listado filtrado del rubro seleccionado en el modal
   const transactionsOfSelectedCategory = useMemo(() => {
     if (!selectedCategoryDetail) return [];
     return filteredTransactions.filter(t => t.type === 'expense' && (t.category || 'Otros') === selectedCategoryDetail);
@@ -988,7 +986,7 @@ export default function FinanzasDRMIA() {
   }
 
   // ==========================================
-  // RENDER: PANTALLA DE PAGO BLOQUEANTE (NO APLICA AL SUPERUSUARIO)
+  // RENDER: PANTALLA DE PAGO (NO APLICA AL SUPERUSUARIO)
   // ==========================================
   if (user && !isSuperUser && !isTrialActive && !hasPaidPlan) {
     return (
@@ -1474,10 +1472,10 @@ export default function FinanzasDRMIA() {
                       outerRadius={75} 
                       paddingAngle={5} 
                       dataKey="value"
-                      onClick={(data) => setSelectedCategoryDetail(data.name)}
+                      onClick={(data: any) => setSelectedCategoryDetail(data?.name || null)}
                       className="cursor-pointer"
                     >
-                      {expenseDataByCategory.map((entry, index) => (
+                      {expenseDataByCategory.map((_entry: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
@@ -1493,7 +1491,7 @@ export default function FinanzasDRMIA() {
 
             {/* Fila interactiva para ver el listado de cada rubro */}
             <div className="flex flex-wrap gap-2 pt-3 border-t border-slate-100">
-              {expenseDataByCategory.map((entry, index) => (
+              {expenseDataByCategory.map((entry: any, index: number) => (
                 <button
                   key={index}
                   onClick={() => setSelectedCategoryDetail(entry.name)}

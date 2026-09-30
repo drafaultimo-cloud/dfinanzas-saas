@@ -663,8 +663,19 @@ export default function FinanzasDRMIA() {
         });
       }
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error procesando datos con IA');
+      // Protección contra cortes de respuesta o timeouts
+      const rawText = await res.text();
+      let data: any = {};
+
+      try {
+        data = JSON.parse(rawText);
+      } catch (_err) {
+        throw new Error('El servidor tardó demasiado en responder o devolvió una respuesta vacía. Reintenta la subida.');
+      }
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Error procesando datos con IA');
+      }
 
       if (data.items && Array.isArray(data.items)) {
         const enrichedItems = data.items.map((item: any) => {
@@ -737,7 +748,6 @@ export default function FinanzasDRMIA() {
 
       let assignedLoanId = targetEntityForImport?.type === 'loan' ? targetEntityForImport.id : null;
 
-      // Si se subió un resumen de billetera desde el botón directo y no existía la entidad, se crea automáticamente
       if (!targetEntityForImport && migrationData.entity_name) {
         const entityName = migrationData.entity_name;
         const existingLoan = loans.find(l => l.entity.toLowerCase().includes(entityName.toLowerCase()));
@@ -1503,7 +1513,7 @@ export default function FinanzasDRMIA() {
             )}
           </div>
 
-          {/* Billeteras Digitales y Préstamos (Con botón de Agregar e Importar siempre visibles) */}
+          {/* Billeteras Digitales y Préstamos */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -1598,7 +1608,7 @@ export default function FinanzasDRMIA() {
                   value={description}
                   onChange={e => setDescription(e.target.value)}
                   placeholder="Ej: Pago a proveedor o supermercado" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500"
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500" 
                   required 
                 />
               </div>
@@ -1608,11 +1618,11 @@ export default function FinanzasDRMIA() {
                   <label className="text-xs text-slate-500">Monto ($)</label>
                   <input 
                     type="number" 
-                    step="0.01"
-                    value={amount}
-                    onChange={e => setAmount(e.target.value)}
+                    step="0.01" 
+                    value={amount} 
+                    onChange={e => setAmount(e.target.value)} 
                     placeholder="0.00" 
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500"
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500" 
                     required 
                   />
                 </div>
@@ -1620,9 +1630,9 @@ export default function FinanzasDRMIA() {
                   <label className="text-xs text-slate-500">Fecha</label>
                   <input 
                     type="date" 
-                    value={customDate}
-                    onChange={e => setCustomDate(e.target.value)}
-                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
+                    value={customDate} 
+                    onChange={e => setCustomDate(e.target.value)} 
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white" 
                     required 
                   />
                 </div>
@@ -1632,8 +1642,8 @@ export default function FinanzasDRMIA() {
                 <div>
                   <label className="text-xs text-slate-500">Rubro</label>
                   <select 
-                    value={category}
-                    onChange={e => setCategory(e.target.value)}
+                    value={category} 
+                    onChange={e => setCategory(e.target.value)} 
                     className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
                   >
                     <option value="Servicios">Servicios / Facturas</option>
@@ -1649,8 +1659,8 @@ export default function FinanzasDRMIA() {
                 <div>
                   <label className="text-xs text-slate-500">Origen del Ingreso</label>
                   <select 
-                    value={incomeSource}
-                    onChange={e => setIncomeSource(e.target.value)}
+                    value={incomeSource} 
+                    onChange={e => setIncomeSource(e.target.value)} 
                     className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
                   >
                     <option value="salary">Sueldo Fijo</option>
@@ -2149,7 +2159,7 @@ export default function FinanzasDRMIA() {
 
               <div className="pt-2 flex gap-2">
                 <button 
-                  type="button"
+                  type="button" 
                   onClick={() => setEditingTransaction(null)} 
                   className="flex-1 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                 >
@@ -2186,8 +2196,8 @@ export default function FinanzasDRMIA() {
                 <span className="text-xs text-slate-400 font-bold whitespace-nowrap">Cliente:</span>
                 {adminUsersList.map(u => (
                   <button 
-                    key={u.user_id}
-                    onClick={() => { setSelectedChatUser(u); loadChatMessages(u.user_email); }}
+                    key={u.user_id} 
+                    onClick={() => { setSelectedChatUser(u); loadChatMessages(u.user_email); }} 
                     className={`text-xs px-2.5 py-1 rounded-lg border whitespace-nowrap cursor-pointer ${selectedChatUser?.user_email === u.user_email ? 'bg-[#00D7FF] text-[#0B192C] font-bold border-[#00D7FF]' : 'bg-slate-900 border-slate-700 text-slate-300'}`}
                   >
                     {u.user_email}
@@ -2214,10 +2224,10 @@ export default function FinanzasDRMIA() {
             <form onSubmit={handleSendChatMessage} className="flex gap-2">
               <input 
                 type="text" 
-                value={newChatMessage}
-                onChange={e => setNewChatMessage(e.target.value)}
-                placeholder="Escribe tu mensaje..."
-                className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white outline-none focus:border-[#00D7FF]"
+                value={newChatMessage} 
+                onChange={e => setNewChatMessage(e.target.value)} 
+                placeholder="Escribe tu mensaje..." 
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white outline-none focus:border-[#00D7FF]" 
               />
               <button type="submit" className="bg-[#00D7FF] text-[#0B192C] font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1 cursor-pointer">
                 <Send className="w-3.5 h-3.5" /> Enviar

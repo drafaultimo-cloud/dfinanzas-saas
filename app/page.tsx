@@ -40,7 +40,8 @@ import {
   Calculator,
   ListFilter,
   Eye,
-  Save
+  Save,
+  FileUp
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -94,7 +95,7 @@ export default function FinanzasDRMIA() {
   const [selectedCategoryDetail, setSelectedCategoryDetail] = useState<string | null>(null);
   const [isIncomeModalOpen, setIsIncomeModalOpen] = useState(false);
 
-  // Estado para Edición Rápida de Transacciones
+  // Edición Rápida de Transacciones
   const [editingTransaction, setEditingTransaction] = useState<any>(null);
   const [editTxType, setEditTxType] = useState<'income' | 'expense'>('income');
   const [editTxCategory, setEditTxCategory] = useState('Alimentos');
@@ -125,23 +126,8 @@ export default function FinanzasDRMIA() {
   const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
 
-  // Comprobantes
-  const [receiptFile, setReceiptFile] = useState<File | null>(null);
-  const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
-  const [receiptFeedback, setReceiptFeedback] = useState<any>(null);
-  const [adminReceipts, setAdminReceipts] = useState<any[]>([]);
-
-  // Formulario manual
-  const [transType, setTransType] = useState<'income' | 'expense'>('expense');
-  const [amount, setAmount] = useState('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('Alimentos');
-  const [customDate, setCustomDate] = useState(new Date().toISOString().split('T')[0]);
-  const [incomeSource, setIncomeSource] = useState('salary');
-  const [selectedCardId, setSelectedCardId] = useState<string>('');
-  const [selectedLoanId, setSelectedLoanId] = useState<string>('');
-
   // Importador masivo IA
+  const [targetCardForImport, setTargetCardForImport] = useState<any>(null);
   const [importText, setImportText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -159,6 +145,22 @@ export default function FinanzasDRMIA() {
   const [editCardClosing, setEditCardClosing] = useState('20');
   const [editCardDue, setEditCardDue] = useState('5');
   const [editCardLimit, setEditCardLimit] = useState('');
+
+  // Comprobantes
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
+  const [receiptFeedback, setReceiptFeedback] = useState<any>(null);
+  const [adminReceipts, setAdminReceipts] = useState<any[]>([]);
+
+  // Formulario manual
+  const [transType, setTransType] = useState<'income' | 'expense'>('expense');
+  const [amount, setAmount] = useState('');
+  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState('Alimentos');
+  const [customDate, setCustomDate] = useState(new Date().toISOString().split('T')[0]);
+  const [incomeSource, setIncomeSource] = useState('salary');
+  const [selectedCardId, setSelectedCardId] = useState<string>('');
+  const [selectedLoanId, setSelectedLoanId] = useState<string>('');
 
   const isSuperUser = user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase());
 
@@ -504,7 +506,6 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  // Abrir Modal de Edición Rápida
   function openEditTransaction(tx: any) {
     setEditingTransaction(tx);
     setEditTxType(tx.type);
@@ -514,7 +515,6 @@ export default function FinanzasDRMIA() {
     setEditTxDescription(tx.description || '');
   }
 
-  // Guardar Cambios de Edición en Supabase
   async function handleSaveTransactionEdit(e: React.FormEvent) {
     e.preventDefault();
     if (!editingTransaction || !user) return;
@@ -535,7 +535,7 @@ export default function FinanzasDRMIA() {
     if (!error) {
       setEditingTransaction(null);
       await refreshAll(user.id);
-      alert('¡Transacción modificada correctamente!');
+      alert('¡Transacción modificada con éxito!');
     } else {
       alert('Error al modificar: ' + error.message);
     }
@@ -602,6 +602,15 @@ export default function FinanzasDRMIA() {
     if (!error && user) refreshAll(user.id);
   }
 
+  // Abrir importador enfocado en una tarjeta específica
+  function openImportForCard(card: any) {
+    setTargetCardForImport(card);
+    setMigrationData(null);
+    setImportText('');
+    setImportFile(null);
+    setIsImportModalOpen(true);
+  }
+
   async function handleExecuteAIImport() {
     if (!importText.trim() && !importFile) return;
     setUploading(true);
@@ -647,28 +656,32 @@ export default function FinanzasDRMIA() {
     setIsSavingBatch(true);
 
     try {
-      if (migrationData.detected_cards?.length > 0) {
-        const cardsToInsert = migrationData.detected_cards.map((c: any) => ({
-          user_id: currentSessionUser.id,
-          name: String(c.name || 'Tarjeta'),
-          closing_day: 20,
-          due_day: 5,
-          credit_limit: parseFloat(String(c.balance || '0').replace(/[^0-9.-]+/g, '')) || 0
-        }));
-        await supabase.from('credit_cards').insert(cardsToInsert);
-      }
+      let assignedCardId = targetCardForImport ? targetCardForImport.id : null;
 
-      if (migrationData.detected_loans?.length > 0) {
-        const loansToInsert = migrationData.detected_loans.map((l: any) => ({
-          user_id: currentSessionUser.id,
-          entity: String(l.entity || 'Préstamo'),
-          total_amount: parseFloat(String(l.total_amount || '0').replace(/[^0-9.-]+/g, '')) || 0,
-          installment_amount: parseFloat(String(l.installment_amount || '0').replace(/[^0-9.-]+/g, '')) || 0,
-          total_installments: 12,
-          paid_installments: 1,
-          due_day: 10
-        }));
-        await supabase.from('loans').insert(loansToInsert);
+      // Si es importación general (sin tarjeta fijada), verificar si las tarjetas detectadas ya existen antes de insertar
+      if (!targetCardForImport && migrationData.detected_cards?.length > 0) {
+        for (const c of migrationData.detected_cards) {
+          const cardName = String(c.name || 'Tarjeta').trim().toLowerCase();
+          // Buscar coincidencia en las tarjetas que ya tiene el usuario
+          const existingCard = creditCards.find(existing => 
+            existing.name.toLowerCase().includes(cardName) || cardName.includes(existing.name.toLowerCase())
+          );
+
+          if (existingCard) {
+            assignedCardId = existingCard.id;
+          } else {
+            // Si realmente no existe, se inserta
+            const { data: newInsertedCard } = await supabase.from('credit_cards').insert([{
+              user_id: currentSessionUser.id,
+              name: String(c.name || 'Tarjeta'),
+              closing_day: 20,
+              due_day: 5,
+              credit_limit: parseFloat(String(c.balance || '0').replace(/[^0-9.-]+/g, '')) || 0
+            }]).select().single();
+
+            if (newInsertedCard) assignedCardId = newInsertedCard.id;
+          }
+        }
       }
 
       const today = new Date().toISOString().split('T')[0];
@@ -681,9 +694,10 @@ export default function FinanzasDRMIA() {
           user_id: currentSessionUser.id,
           description: String(item.description || 'Movimiento importado'),
           amount: Math.abs(cleanAmount),
-          category: item.category || 'Otros',
+          category: item.category || (targetCardForImport ? 'Tarjeta de Crédito' : 'Otros'),
           type: item.type === 'income' ? 'income' : 'expense',
           income_source: item.type === 'income' ? 'salary' : null,
+          credit_card_id: targetCardForImport ? targetCardForImport.id : assignedCardId,
           date: (item.date && item.date.length === 10) ? item.date : today,
           installment_number: Number(item.installment_number) || 1,
           total_installments: Number(item.total_installments) || 1
@@ -697,8 +711,9 @@ export default function FinanzasDRMIA() {
       setMigrationData(null);
       setImportText('');
       setImportFile(null);
+      setTargetCardForImport(null);
       await refreshAll(currentSessionUser.id);
-      alert(`¡Éxito! Se guardaron ${rows.length} registros.`);
+      alert(`¡Éxito! Se agregaron ${rows.length} movimientos a ${targetCardForImport ? targetCardForImport.name : 'tu panel'}.`);
     } catch (err: any) {
       alert('Error al guardar: ' + err.message);
     } finally {
@@ -1228,10 +1243,10 @@ export default function FinanzasDRMIA() {
             </div>
 
             <button 
-              onClick={() => setIsImportModalOpen(true)}
+              onClick={() => { setTargetCardForImport(null); setIsImportModalOpen(true); }}
               className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1 cursor-pointer"
             >
-              <Sparkles className="w-4 h-4 text-cyan-200" /> Importar IA
+              <Sparkles className="w-4 h-4 text-cyan-200" /> Importar Inicial con IA
             </button>
             <button 
               onClick={() => supabase.auth.signOut()} 
@@ -1271,7 +1286,7 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Métricas Principales (La tarjeta de Ingresos ahora es cliqueable) */}
+        {/* Métricas Principales (La tarjeta de Ingresos ahora es interactiva) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div 
             onClick={() => setIsIncomeModalOpen(true)}
@@ -1357,7 +1372,7 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Tarjetas de Crédito y Préstamos */}
+        {/* Tarjetas de Crédito con Importación Individual */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
@@ -1377,24 +1392,35 @@ export default function FinanzasDRMIA() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {creditCards.map(c => (
-                  <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1 relative group">
-                    <div className="flex justify-between items-start">
-                      <p className="text-xs font-bold text-slate-800 pr-12">{c.name}</p>
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => openEditCard(c)} className="p-1 text-slate-400 hover:text-blue-600 rounded">
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => handleDeleteCard(c.id)} className="p-1 text-slate-400 hover:text-red-500 rounded">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                  <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-2 relative group flex flex-col justify-between">
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <p className="text-xs font-bold text-slate-800 pr-12">{c.name}</p>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => openEditCard(c)} className="p-1 text-slate-400 hover:text-blue-600 rounded">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => handleDeleteCard(c.id)} className="p-1 text-slate-400 hover:text-red-500 rounded">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
+                      <p className="text-[10px] text-slate-500 mt-0.5">
+                        Cierre: <strong className="text-slate-700">Día {c.closing_day}</strong> • Vence: <strong className="text-slate-700">Día {c.due_day}</strong>
+                      </p>
+                      {c.credit_limit > 0 && (
+                        <p className="text-[10px] text-rose-600 font-semibold mt-0.5">Deuda: {formatMoney(Number(c.credit_limit))}</p>
+                      )}
                     </div>
-                    <p className="text-[10px] text-slate-500">
-                      Cierre: <strong className="text-slate-700">Día {c.closing_day}</strong> • Vence: <strong className="text-slate-700">Día {c.due_day}</strong>
-                    </p>
-                    {c.credit_limit > 0 && (
-                      <p className="text-[10px] text-rose-600 font-semibold">Deuda: {formatMoney(Number(c.credit_limit))}</p>
-                    )}
+
+                    {/* Botón Importar Resumen Directo a Esta Tarjeta */}
+                    <button
+                      onClick={() => openImportForCard(c)}
+                      className="w-full mt-2 py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <FileUp className="w-3 h-3 text-indigo-600" />
+                      Importar Resumen del Mes
+                    </button>
                   </div>
                 ))}
               </div>
@@ -2008,26 +2034,36 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
+      {/* Modal Importador (General o enfocado en una tarjeta) */}
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-indigo-600" />
-                <h3 className="text-base font-bold text-slate-900">Migrar con IA</h3>
+                <h3 className="text-base font-bold text-slate-900">
+                  {targetCardForImport ? `Importar Resumen del Mes: ${targetCardForImport.name}` : 'Migrar Datos Iniciales con IA'}
+                </h3>
               </div>
-              <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); }}><X className="w-5 h-5" /></button>
+              <button onClick={() => { setIsImportModalOpen(false); setMigrationData(null); setTargetCardForImport(null); }}><X className="w-5 h-5" /></button>
             </div>
+
+            {targetCardForImport && (
+              <div className="bg-indigo-50 border border-indigo-200 p-3 rounded-xl text-xs text-indigo-900">
+                Los consumos extraídos se vincularán directamente a <strong>{targetCardForImport.name}</strong> sin crear tarjetas duplicadas.
+              </div>
+            )}
+
             {!migrationData ? (
               <div className="space-y-4">
                 <input type="file" id="file-upload-input" accept="application/pdf,image/*" className="hidden" onChange={e => setImportFile(e.target.files?.[0] || null)} />
-                <label htmlFor="file-upload-input" className="cursor-pointer flex flex-col items-center gap-1.5 border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center">
+                <label htmlFor="file-upload-input" className="cursor-pointer flex flex-col items-center gap-1.5 border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-500">
                   <UploadCloud className="w-8 h-8 text-indigo-500" />
-                  <span className="text-xs font-semibold text-slate-700">{importFile ? importFile.name : 'Subir resumen o planilla'}</span>
+                  <span className="text-xs font-semibold text-slate-700">{importFile ? importFile.name : 'Subir resumen bancario o extracto'}</span>
                 </label>
-                <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="O pega filas de Excel..." className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none font-mono" />
+                <textarea value={importText} onChange={e => setImportText(e.target.value)} placeholder="O pega filas de Excel o texto..." className="w-full h-28 border border-slate-200 rounded-xl p-3 text-xs outline-none font-mono" />
                 <button onClick={handleExecuteAIImport} disabled={uploading || (!importFile && !importText.trim())} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
-                  {uploading ? 'Gemini analizando...' : 'Analizar'}
+                  {uploading ? 'Gemini analizando...' : 'Analizar Resumen'}
                 </button>
               </div>
             ) : (
@@ -2041,7 +2077,7 @@ export default function FinanzasDRMIA() {
                   ))}
                 </div>
                 <button onClick={handleConfirmMigration} disabled={isSavingBatch} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-3 rounded-xl cursor-pointer">
-                  Confirmar y Guardar
+                  Confirmar e Incorporar al Historial
                 </button>
               </div>
             )}

@@ -39,7 +39,8 @@ import {
   User as UserIcon, 
   Calculator,
   ListFilter,
-  Eye
+  Eye,
+  Save
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -50,7 +51,7 @@ const COLORS = ['#FF8042', '#00C49F', '#0088FE', '#faad14', '#8884d8', '#ff4d4f'
 const ADMIN_EMAILS = ['drafaultimo@gmail.com', 'd_rafael_m@hotmail.com'];
 const TRIAL_DAYS = 10;
 
-// Precios Promocionales (40% OFF por 6 meses)
+// Precios de Lanzamiento
 const PLAN_ESENCIAL_REGULAR = 12000;
 const PLAN_ESENCIAL_PROMO = 7200;
 const PLAN_PRO_REGULAR = 24500;
@@ -89,8 +90,17 @@ export default function FinanzasDRMIA() {
   const [loans, setLoans] = useState<any[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
 
-  // Modal para Desglose de Gastos por Rubro
+  // Modales de Desglose
   const [selectedCategoryDetail, setSelectedCategoryDetail] = useState<string | null>(null);
+  const [isIncomeModalOpen, setIsIncomeModalOpen] = useState(false);
+
+  // Estado para Edición Rápida de Transacciones
+  const [editingTransaction, setEditingTransaction] = useState<any>(null);
+  const [editTxType, setEditTxType] = useState<'income' | 'expense'>('income');
+  const [editTxCategory, setEditTxCategory] = useState('Alimentos');
+  const [editTxIncomeSource, setEditTxIncomeSource] = useState('salary');
+  const [editTxAmount, setEditTxAmount] = useState('');
+  const [editTxDescription, setEditTxDescription] = useState('');
 
   // Auditor Financiero con IA
   const [aiDiagnosis, setAiDiagnosis] = useState<string>('');
@@ -166,7 +176,7 @@ export default function FinanzasDRMIA() {
       deferredPrompt.prompt();
       deferredPrompt.userChoice.then(() => setDeferredPrompt(null));
     } else {
-      alert('En Android: toca los 3 puntos arriba a la derecha y selecciona "Instalar y crear acceso directo". En iPhone: toca Compartir y selecciona "Agregar al inicio".');
+      alert('En Android: toca los 3 puntos arriba a la derecha y presiona "Instalar y crear acceso directo". En iPhone: toca Compartir y selecciona "Agregar al inicio".');
     }
   }
 
@@ -494,6 +504,43 @@ export default function FinanzasDRMIA() {
     }
   }
 
+  // Abrir Modal de Edición Rápida
+  function openEditTransaction(tx: any) {
+    setEditingTransaction(tx);
+    setEditTxType(tx.type);
+    setEditTxCategory(tx.category || 'Otros');
+    setEditTxIncomeSource(tx.income_source || 'salary');
+    setEditTxAmount(String(tx.amount || '0'));
+    setEditTxDescription(tx.description || '');
+  }
+
+  // Guardar Cambios de Edición en Supabase
+  async function handleSaveTransactionEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingTransaction || !user) return;
+
+    const payload = {
+      description: editTxDescription,
+      amount: parseFloat(editTxAmount) || 0,
+      type: editTxType,
+      category: editTxType === 'expense' ? editTxCategory : 'Ingreso',
+      income_source: editTxType === 'income' ? editTxIncomeSource : null
+    };
+
+    const { error } = await supabase
+      .from('transactions')
+      .update(payload)
+      .eq('id', editingTransaction.id);
+
+    if (!error) {
+      setEditingTransaction(null);
+      await refreshAll(user.id);
+      alert('¡Transacción modificada correctamente!');
+    } else {
+      alert('Error al modificar: ' + error.message);
+    }
+  }
+
   async function handleCreateCard(e: React.FormEvent) {
     e.preventDefault();
     if (!newCardName || !user) return;
@@ -676,9 +723,13 @@ export default function FinanzasDRMIA() {
     });
   }, [transactions, selectedMonth, profileType]);
 
-  const totalIncome = useMemo(() => {
-    return filteredTransactions.filter(t => t.type === 'income').reduce((acc, t) => acc + Number(t.amount || 0), 0);
+  const incomeTransactions = useMemo(() => {
+    return filteredTransactions.filter(t => t.type === 'income');
   }, [filteredTransactions]);
+
+  const totalIncome = useMemo(() => {
+    return incomeTransactions.reduce((acc, t) => acc + Number(t.amount || 0), 0);
+  }, [incomeTransactions]);
 
   const totalExpense = useMemo(() => {
     return filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + Number(t.amount || 0), 0);
@@ -1220,14 +1271,22 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Métricas Principales */}
+        {/* Métricas Principales (La tarjeta de Ingresos ahora es cliqueable) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div 
+            onClick={() => setIsIncomeModalOpen(true)}
+            title="Toca para ver el desglose de ingresos"
+            className="bg-white p-5 rounded-2xl border border-emerald-100 shadow-sm flex items-center justify-between cursor-pointer hover:border-emerald-400 hover:shadow-md transition-all group"
+          >
             <div>
-              <p className="text-xs text-slate-400">Total Ingresos ({selectedMonth})</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs text-slate-400">Total Ingresos ({selectedMonth})</p>
+                <Eye className="w-3 h-3 text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
               <h3 className="text-xl font-bold text-emerald-600">{formatMoney(totalIncome)}</h3>
+              <p className="text-[10px] text-emerald-600 font-semibold mt-0.5">Toca para ver desglose ➔</p>
             </div>
-            <ArrowUpCircle className="w-8 h-8 text-emerald-500 opacity-20" />
+            <ArrowUpCircle className="w-8 h-8 text-emerald-500 opacity-20 group-hover:opacity-80 transition-all" />
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
@@ -1423,7 +1482,7 @@ export default function FinanzasDRMIA() {
                 </div>
               </div>
 
-              {transType === 'expense' && (
+              {transType === 'expense' ? (
                 <div>
                   <label className="text-xs text-slate-500">Rubro</label>
                   <select 
@@ -1438,6 +1497,20 @@ export default function FinanzasDRMIA() {
                     <option value="Tarjeta de Crédito">Pago Tarjeta</option>
                     <option value="Préstamos">Cuota Préstamo</option>
                     <option value="Otros">Otros</option>
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs text-slate-500">Origen del Ingreso</label>
+                  <select 
+                    value={incomeSource}
+                    onChange={e => setIncomeSource(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
+                  >
+                    <option value="salary">Sueldo Fijo</option>
+                    <option value="freelance">Honorarios / Extras</option>
+                    <option value="business">Ventas Comercio</option>
+                    <option value="investments">Rendimientos / Inversiones</option>
                   </select>
                 </div>
               )}
@@ -1507,10 +1580,10 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
 
-        {/* Historial */}
+        {/* Historial General */}
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-sm font-bold text-slate-900">Historial ({filteredTransactions.length} registros)</h3>
+            <h3 className="text-sm font-bold text-slate-900">Historial de Movimientos ({filteredTransactions.length} registros)</h3>
             <button 
               onClick={() => window.print()}
               className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-3 py-1.5 rounded-xl border border-slate-200 flex items-center gap-1.5 cursor-pointer"
@@ -1526,14 +1599,21 @@ export default function FinanzasDRMIA() {
                   <p className="text-xs font-semibold text-slate-800">{t.description}</p>
                   <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
                     <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
-                    <span>• {t.category}</span>
+                    <span>• {t.type === 'income' ? `Ingreso (${t.income_source || 'general'})` : `Rubro: ${t.category}`}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
                     {t.type === 'income' ? '+' : '-'}{formatMoney(Number(t.amount))}
                   </span>
-                  <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500 cursor-pointer">
+                  <button 
+                    onClick={() => openEditTransaction(t)}
+                    title="Editar rubro, origen o monto"
+                    className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500 cursor-pointer p-1">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -1544,7 +1624,73 @@ export default function FinanzasDRMIA() {
 
       </div>
 
-      {/* MODAL: DESGLOSE DETALLADO DEL RUBRO SELECCIONADO */}
+      {/* MODAL: DESGLOSE COMPLETO DE INGRESOS */}
+      {isIncomeModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col border border-slate-100">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <ArrowUpCircle className="w-6 h-6 text-emerald-600" />
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Desglose de Ingresos ({selectedMonth})
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    {incomeTransactions.length} registros que suman {formatMoney(totalIncome)}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsIncomeModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              {incomeTransactions.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-8">No hay ingresos registrados en este mes seleccionado.</p>
+              ) : (
+                incomeTransactions.map(t => (
+                  <div key={t.id} className="p-3 bg-emerald-50/40 border border-emerald-100 rounded-xl flex justify-between items-center text-xs">
+                    <div>
+                      <p className="font-semibold text-slate-900">{t.description}</p>
+                      <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-500">
+                        <span className="font-mono">📅 {t.date}</span>
+                        <span>• Origen: <strong>{t.income_source || 'Sueldo/Fijo'}</strong></span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-bold text-emerald-600 text-sm">
+                        +{formatMoney(Number(t.amount))}
+                      </span>
+                      <button 
+                        onClick={() => openEditTransaction(t)}
+                        title="Editar transacción"
+                        className="p-1 text-slate-400 hover:text-blue-600 rounded bg-white border border-slate-200"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => setIsIncomeModalOpen(false)}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-colors cursor-pointer"
+              >
+                Cerrar Desglose
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DESGLOSE DE GASTOS POR RUBRO */}
       {selectedCategoryDetail && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col border border-slate-100">
@@ -1578,9 +1724,18 @@ export default function FinanzasDRMIA() {
                       <p className="font-semibold text-slate-800">{t.description}</p>
                       <p className="text-[10px] text-slate-400 font-mono mt-0.5">Fecha del movimiento: {t.date}</p>
                     </div>
-                    <span className="font-bold text-rose-600">
-                      -{formatMoney(Number(t.amount))}
-                    </span>
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-bold text-rose-600">
+                        -{formatMoney(Number(t.amount))}
+                      </span>
+                      <button 
+                        onClick={() => openEditTransaction(t)}
+                        title="Modificar rubro o datos"
+                        className="p-1 text-slate-400 hover:text-blue-600 rounded bg-white border border-slate-200"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -1594,6 +1749,106 @@ export default function FinanzasDRMIA() {
                 Cerrar Desglose
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EDITAR RUBRO, ORIGEN O DATOS DE TRANSACCIÓN */}
+      {editingTransaction && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-4 border border-slate-100">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-900">Modificar Transacción</h3>
+              <button onClick={() => setEditingTransaction(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveTransactionEdit} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500">Descripción</label>
+                <input 
+                  type="text" 
+                  value={editTxDescription} 
+                  onChange={e => setEditTxDescription(e.target.value)} 
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" 
+                  required 
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-500">Monto ($)</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  value={editTxAmount} 
+                  onChange={e => setEditTxAmount(e.target.value)} 
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" 
+                  required 
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-500">Tipo de Movimiento</label>
+                <select 
+                  value={editTxType} 
+                  onChange={(e: any) => setEditTxType(e.target.value)} 
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
+                >
+                  <option value="income">Ingreso (+)</option>
+                  <option value="expense">Gasto (-)</option>
+                </select>
+              </div>
+
+              {editTxType === 'expense' ? (
+                <div>
+                  <label className="text-xs text-slate-500">Cambiar Rubro</label>
+                  <select 
+                    value={editTxCategory} 
+                    onChange={e => setEditTxCategory(e.target.value)} 
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
+                  >
+                    <option value="Servicios">Servicios / Facturas</option>
+                    <option value="Supermercado">Supermercado</option>
+                    <option value="Alimentos">Alimentos / Restaurantes</option>
+                    <option value="Transporte">Transporte / Combustible</option>
+                    <option value="Tarjeta de Crédito">Pago Tarjeta</option>
+                    <option value="Préstamos">Cuota Préstamo</option>
+                    <option value="Otros">Otros</option>
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs text-slate-500">Cambiar Origen de Ingreso</label>
+                  <select 
+                    value={editTxIncomeSource} 
+                    onChange={e => setEditTxIncomeSource(e.target.value)} 
+                    className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
+                  >
+                    <option value="salary">Sueldo Fijo</option>
+                    <option value="freelance">Honorarios / Extras</option>
+                    <option value="business">Ventas Comercio</option>
+                    <option value="investments">Rendimientos / Inversiones</option>
+                  </select>
+                </div>
+              )}
+
+              <div className="pt-2 flex gap-2">
+                <button 
+                  type="button"
+                  onClick={() => setEditingTransaction(null)} 
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit" 
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" /> Guardar
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

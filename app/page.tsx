@@ -129,7 +129,7 @@ export default function FinanzasDRMIA() {
   const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
 
-  // Importador IA enfocado
+  // Importador IA
   const [targetEntityForImport, setTargetEntityForImport] = useState<{ type: 'card' | 'loan', id: string, name: string } | null>(null);
   const [importText, setImportText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -679,6 +679,7 @@ export default function FinanzasDRMIA() {
         });
       }
 
+      // Protección contra cortes de respuesta o timeouts
       const rawText = await res.text();
       let data: any = {};
       try {
@@ -1482,7 +1483,7 @@ export default function FinanzasDRMIA() {
 
         {/* Tarjetas de Crédito Bimonetarias y Billeteras Digitales */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Tarjetas con Saldo ARS y Saldo USD independientes */}
+          {/* Tarjetas: SIEMPRE muestra tanto el renglón ARS como el renglón USD */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -1501,8 +1502,8 @@ export default function FinanzasDRMIA() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {creditCards.map(c => {
-                  const hasUsd = Number(c.balance_usd || 0) !== 0;
-                  const isUsdNegative = Number(c.balance_usd || 0) < 0;
+                  const valUsd = Number(c.balance_usd || 0);
+                  const isUsdNegative = valUsd < 0;
 
                   return (
                     <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-2 relative group flex flex-col justify-between">
@@ -1522,16 +1523,14 @@ export default function FinanzasDRMIA() {
                           Cierre: <strong className="text-slate-700">Día {c.closing_day}</strong> • Vence: <strong className="text-slate-700">Día {c.due_day}</strong>
                         </p>
                         
-                        {/* Saldos Bimonetarios */}
+                        {/* Saldos Bimonetarios: Ambos siempre visibles */}
                         <div className="mt-1 space-y-0.5 pt-1 border-t border-slate-100">
                           <p className="text-[11px] font-bold text-rose-600">
                             Deuda ARS: {formatMoney(Number(c.balance_ars || c.credit_limit || 0), 'ARS')}
                           </p>
-                          {hasUsd && (
-                            <p className={`text-[11px] font-bold ${isUsdNegative ? 'text-emerald-600' : 'text-rose-600'}`}>
-                              Saldo USD: {formatMoney(Number(c.balance_usd), 'USD')} {isUsdNegative ? '(A favor)' : ''}
-                            </p>
-                          )}
+                          <p className={`text-[11px] font-bold ${isUsdNegative ? 'text-emerald-600' : valUsd > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+                            Saldo USD: {formatMoney(valUsd, 'USD')} {isUsdNegative ? '(A favor)' : ''}
+                          </p>
                         </div>
                       </div>
 
@@ -1890,7 +1889,7 @@ export default function FinanzasDRMIA() {
                 <input type="number" step="0.01" value={editCardLimitArs} onChange={e => setEditCardLimitArs(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" />
               </div>
               <div>
-                <label className="text-xs text-slate-500">Saldo en Dólares (USD u$s - si es a favor poner negativo)</label>
+                <label className="text-xs text-slate-500">Saldo en Dólares (USD u$s - si es a favor colocar con signo menos -)</label>
                 <input type="number" step="0.01" value={editCardLimitUsd} onChange={e => setEditCardLimitUsd(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold text-emerald-700" />
               </div>
               <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar Modificaciones</button>
@@ -1915,11 +1914,11 @@ export default function FinanzasDRMIA() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-xs text-slate-500">Cierre</label>
-                  <input type="number" min="1" max="31" value={newCardClosing} onChange={e => setNewCardClosing(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
+                  <input type="number" min="1" max="31" value={newCardClosing} onChange={e => setNewCardClosing(e.target.value)} placeholder="Día cierre" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
                 </div>
                 <div>
                   <label className="text-xs text-slate-500">Vencimiento</label>
-                  <input type="number" min="1" max="31" value={newCardDue} onChange={e => setNewCardDue(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
+                  <input type="number" min="1" max="31" value={newCardDue} onChange={e => setNewCardDue(e.target.value)} placeholder="Día vencimiento" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-bold" required />
                 </div>
               </div>
               <div>
@@ -1963,7 +1962,7 @@ export default function FinanzasDRMIA() {
                   step="0.01" 
                   value={newLoanTotal} 
                   onChange={e => setNewLoanTotal(e.target.value)} 
-                  placeholder="0.00" 
+                  placeholder="0.00 (si es billetera puedes dejar en 0)" 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" 
                 />
               </div>

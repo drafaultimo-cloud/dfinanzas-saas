@@ -1,52 +1,44 @@
-﻿import { NextRequest, NextResponse } from 'next/server'
-import { GoogleGenAI, Type } from '@google/genai'
+import { NextRequest, NextResponse } from 'next/server';
+import { Type } from '@google/genai';
+import { GEMINI_MODEL, IMAGE_OR_PDF, getAI, handleError, readUpload, requireUser } from '@/lib/server/guard';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' })
+export const maxDuration = 60;
+export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData()
-    const file = formData.get('file') as File | null
+    await requireUser(req, { needPro: true, rateKey: 'scan', rateMax: 20 });
 
-    if (!file) {
-      return NextResponse.json({ error: 'No se envió ningún archivo' }, { status: 400 })
-    }
+    const formData = await req.formData();
+    const { buffer, mimeType } = await readUpload(formData.get('file') as File | null, IMAGE_OR_PDF);
 
-    const bytes = await file.arrayBuffer()
-    const base64Data = Buffer.from(bytes).toString('base64')
-
+    const ai = getAI();
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: GEMINI_MODEL,
       contents: [
-        {
-          inlineData: {
-            mimeType: file.type || 'image/jpeg',
-            data: base64Data
-          }
-        },
-        'Extrae el comercio o concepto principal, el monto total pagado y clasifícalo en una de estas categorías: Alimentos, Transporte, Servicios, Entretenimiento, Salud, Otros.'
+        { inlineData: { mimeType, data: buffer.toString('base64') } },
+        'Extrae el comercio o concepto principal, el monto total pagado y clasifícalo en una de estas categorías: Alimentos, Transporte, Servicios, Entretenimiento, Salud, Otros.',
       ],
       config: {
+        temperature: 0,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
           properties: {
             description: { type: Type.STRING, description: 'Nombre del comercio o concepto del ticket' },
             amount: { type: Type.NUMBER, description: 'Monto total pagado' },
-            category: { 
-              type: Type.STRING, 
-              enum: ['Alimentos', 'Transporte', 'Servicios', 'Entretenimiento', 'Salud', 'Otros']
-            }
+            category: {
+              type: Type.STRING,
+              enum: ['Alimentos', 'Transporte', 'Servicios', 'Entretenimiento', 'Salud', 'Otros'],
+            },
           },
-          required: ['description', 'amount', 'category']
-        }
-      }
-    })
+          required: ['description', 'amount', 'category'],
+        },
+      },
+    });
 
-    const parsedData = JSON.parse(response.text || '{}')
-    return NextResponse.json(parsedData)
-  } catch (error: any) {
-    console.error('Error analizando ticket:', error)
-    return NextResponse.json({ error: error.message || 'Error al procesar el comprobante' }, { status: 500 })
+    return NextResponse.json(JSON.parse(response.text || '{}'));
+  } catch (error) {
+    return handleError(error, 'Error analizando ticket:');
   }
 }

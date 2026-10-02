@@ -1,12 +1,22 @@
-﻿'use client';
+'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import {
+  DEFAULT_ADMIN_EMAILS,
+  DEFAULT_USD_RATE,
+  PLAN_ESENCIAL_PROMO,
+  PLAN_ESENCIAL_REGULAR,
+  PLAN_PRO_PROMO,
+  PLAN_PRO_REGULAR,
+  TRIAL_DAYS,
+  todayLocal,
+} from '@/lib/config';
+import { AccessState, computeAccess, isAdminEmail } from '@/lib/access';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { 
   Sparkles, 
   CreditCard, 
-  CheckCircle2, 
   X, 
   Landmark, 
   Plus, 
@@ -41,9 +51,7 @@ import {
   ListFilter,
   Eye,
   Save,
-  FileUp,
-  Receipt,
-  CornerDownLeft
+  FileUp
 } from 'lucide-react';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -51,13 +59,14 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const COLORS = ['#FF8042', '#00C49F', '#0088FE', '#faad14', '#8884d8', '#ff4d4f', '#13c2c2', '#a0d911'];
-const ADMIN_EMAILS = ['drafaultimo@gmail.com', 'd_rafael_m@hotmail.com'];
-const TRIAL_DAYS = 10;
 
-const PLAN_ESENCIAL_REGULAR = 12000;
-const PLAN_ESENCIAL_PROMO = 7200;
-const PLAN_PRO_REGULAR = 24500;
-const PLAN_PRO_PROMO = 14700;
+type Cur = 'ARS' | 'USD';
+
+// Los pagos de tarjeta son transferencias (no ingresos) y los reintegros restan gasto.
+const isTransfer = (t: any) => t.operation_type === 'payment';
+const isRefund = (t: any) => t.operation_type === 'refund';
+// balance_ars pasó a ser el saldo; credit_limit solo es respaldo de datos viejos (?? y no ||, así un saldo 0 no muestra el límite)
+const cardBalanceArs = (c: any) => Number(c.balance_ars ?? c.credit_limit ?? 0);
 
 export default function FinanzasDRMIA() {
   const [viewMode, setViewMode] = useState<'landing' | 'app'>('landing');
@@ -72,10 +81,11 @@ export default function FinanzasDRMIA() {
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
 
-  // Período de prueba y suscripción
-  const [isTrialActive, setIsTrialActive] = useState<boolean>(true);
-  const [trialDaysLeft, setTrialDaysLeft] = useState<number>(TRIAL_DAYS);
-  const [hasPaidPlan, setHasPaidPlan] = useState<boolean>(false);
+  // Suscripción (se calcula con lib/access.ts, la misma lógica que usa el servidor)
+  const [access, setAccess] = useState<AccessState | null>(null);
+  const [dataError, setDataError] = useState('');
+  const bootstrappedFor = useRef<string | null>(null);
+  const monthInitialized = useRef(false);
   const [selectedPlanToPay, setSelectedPlanToPay] = useState<'base' | 'pro'>('pro');
 
   // PWA Prompt
@@ -84,7 +94,7 @@ export default function FinanzasDRMIA() {
   // Perfil Dual y Multimoneda
   const [profileType, setProfileType] = useState<'personal' | 'business'>('personal');
   const [currencyMode, setCurrencyMode] = useState<'ARS' | 'USD'>('ARS');
-  const usdRate = 1350;
+  const [usdRate, setUsdRate] = useState<number>(DEFAULT_USD_RATE);
 
   // Datos financieros
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -168,12 +178,32 @@ export default function FinanzasDRMIA() {
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Alimentos');
-  const [customDate, setCustomDate] = useState(new Date().toISOString().split('T')[0]);
+  const [customDate, setCustomDate] = useState(todayLocal());
   const [incomeSource, setIncomeSource] = useState('salary');
   const [selectedCardId, setSelectedCardId] = useState<string>('');
   const [selectedLoanId, setSelectedLoanId] = useState<string>('');
 
-  const isSuperUser = user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase());
+  const isSuperUser = !!user?.email && (access?.status === 'admin' || isAdminEmail(user.email));
+  const hasPaidPlan = access?.status === 'paid' || access?.status === 'admin';
+  const isTrialActive = access?.status === 'trial' || access?.status === 'admin';
+  const trialDaysLeft = access?.trialDaysLeft ?? TRIAL_DAYS;
+  const isPro = access?.plan === 'pro';
+
+  useEffect(() => {
+    try {
+      const saved = parseFloat(localStorage.getItem('drmia_usd_rate') || '');
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (saved > 0) setUsdRate(saved);
+    } catch {}
+  }, []);
+
+  function updateUsdRate(v: string) {
+    const n = parseFloat(v);
+    if (n > 0) {
+      setUsdRate(n);
+      try { localStorage.setItem('drmia_usd_rate', String(n)); } catch {}
+    }
+  }
 
   useEffect(() => {
     const handlePrompt = (e: any) => {
@@ -193,125 +223,94 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.user) {
-        setUser(session.user);
-        await evaluateAccessAndLoad(session.user);
-        await checkUnreadMessages(session.user);
-      } else {
-        setUser(null);
-      }
-      setLoading(false);
-    });
+  // fetch con el token de sesión: las APIs validan usuario y plan en el servidor
+  async function authFetch(url: string, init: RequestInit = {}) {
+    const { data } = await supabase.auth.getSession();
+    const headers = new Headers(init.headers);
+    if (data.session?.access_token) headers.set('Authorization', `Bearer ${data.session.access_token}`);
+    return fetch(url, { ...init, headers });
+  }
 
-    checkInitialSession();
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  async function checkInitialSession() {
+  async function readJson(res: Response): Promise<any> {
+    const text = await res.text();
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        setUser(session.user);
-        await evaluateAccessAndLoad(session.user);
-        await checkUnreadMessages(session.user);
-      }
+      return JSON.parse(text);
+    } catch {
+      if (res.status === 413) return { error: 'El archivo es demasiado grande (máximo 4 MB).' };
+      return { error: `Error del servidor (${res.status}). Reintentá en unos minutos.` };
+    }
+  }
+
+  async function bootstrapUser(u: any) {
+    if (bootstrappedFor.current === u.id) return;
+    bootstrappedFor.current = u.id;
+    try {
+      await evaluateAccessAndLoad(u);
+      await checkUnreadMessages(u);
     } catch (err) {
       console.error(err);
+      bootstrappedFor.current = null;
     } finally {
       setLoading(false);
     }
   }
 
   async function evaluateAccessAndLoad(currentUser: any) {
-    if (ADMIN_EMAILS.includes(currentUser.email?.toLowerCase())) {
-      setIsTrialActive(true);
-      setHasPaidPlan(true);
-      await loadAdminMetrics();
-      await refreshAll(currentUser.id);
-      return;
-    }
-
-    const createdAt = new Date(currentUser.created_at || new Date().toISOString());
-    const now = new Date();
-    const diffTime = Math.abs(now.getTime() - createdAt.getTime());
-    const daysSinceRegistration = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    const remainingDays = Math.max(0, TRIAL_DAYS - daysSinceRegistration);
-
-    setTrialDaysLeft(remainingDays);
-
-    const { data: receipts } = await supabase
+    const { data: receipts, error } = await supabase
       .from('payment_receipts')
       .select('*')
       .eq('user_id', currentUser.id)
-      .order('created_at', { ascending: false })
-      .limit(1);
+      .order('created_at', { ascending: false });
+    if (error) console.error('Error leyendo comprobantes:', error);
 
-    const hasVerifiedPayment = receipts && receipts.length > 0 && 
-      (receipts[0].ai_status === 'approved_by_ai' || receipts[0].admin_status === 'verified');
+    // Misma función que usa el servidor para autorizar las APIs de IA.
+    setAccess(computeAccess({
+      email: currentUser.email,
+      createdAt: currentUser.created_at,
+      receipts: receipts || [],
+    }));
 
-    if (hasVerifiedPayment) {
-      setHasPaidPlan(true);
-      setIsTrialActive(false);
-    } else if (remainingDays > 0) {
-      setIsTrialActive(true);
-      setHasPaidPlan(false);
-    } else {
-      setIsTrialActive(false);
-      setHasPaidPlan(false);
-    }
-
-    if (receipts && receipts.length > 0) {
-      setReceiptFeedback(receipts[0]);
-    }
-
+    if (receipts && receipts.length > 0) setReceiptFeedback(receipts[0]);
+    if (isAdminEmail(currentUser.email)) await loadAdminMetrics();
     await refreshAll(currentUser.id);
   }
 
   async function loadAdminMetrics() {
-    const { data: receipts } = await supabase
-      .from('payment_receipts')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (receipts) setAdminReceipts(receipts);
-
-    const { data: usersData } = await supabase
-      .from('payment_receipts')
-      .select('user_email, user_id');
-
-    if (usersData) {
-      const filtered = usersData.filter(u => u.user_email && !ADMIN_EMAILS.includes(u.user_email.toLowerCase()));
-      const uniqueUsers = Array.from(new Set(filtered.map(u => u.user_email)))
-        .map(email => filtered.find(u => u.user_email === email));
-      setAdminUsersList(uniqueUsers);
-      setTotalAppUsersCount(Math.max(uniqueUsers.length, 1));
+    try {
+      const res = await authFetch('/api/admin/overview');
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || 'Error cargando panel');
+      setAdminReceipts(data.receipts || []);
+      setAdminUsersList(data.users || []);
+      setTotalAppUsersCount((data.users || []).length);
+    } catch (err) {
+      console.error('Panel admin:', err);
     }
   }
 
   async function checkUnreadMessages(currentUser: any) {
     const { count } = await supabase
       .from('user_support_chats')
-      .select('*', { count: 'exact' })
+      .select('*', { count: 'exact', head: true })
       .eq('receiver_email', currentUser.email)
       .eq('is_read', false);
 
     if (count !== null) setUnreadCount(count);
   }
 
+  // Los valores van entre comillas dobles para que un email con , ( ) no altere el filtro.
+  const q = (v: string) => `"${String(v).replace(/["\\]/g, '')}"`;
+
   async function loadChatMessages(targetUserEmail?: string) {
     if (!user) return;
-    const adminMain = ADMIN_EMAILS[0];
+    const adminMain = DEFAULT_ADMIN_EMAILS[0];
     const otherEmail = targetUserEmail || (isSuperUser ? selectedChatUser?.user_email : adminMain);
     if (!otherEmail) return;
 
     const { data } = await supabase
       .from('user_support_chats')
       .select('*')
-      .or(`and(sender_email.eq.${user.email},receiver_email.eq.${otherEmail}),and(sender_email.eq.${otherEmail},receiver_email.eq.${user.email})`)
+      .or(`and(sender_email.eq.${q(user.email)},receiver_email.eq.${q(otherEmail)}),and(sender_email.eq.${q(otherEmail)},receiver_email.eq.${q(user.email)})`)
       .order('created_at', { ascending: true });
 
     if (data) {
@@ -329,8 +328,7 @@ export default function FinanzasDRMIA() {
     e.preventDefault();
     if (!newChatMessage.trim() || !user) return;
 
-    const adminMain = ADMIN_EMAILS[0];
-    const receiverEmail = isSuperUser ? selectedChatUser?.user_email : adminMain;
+    const receiverEmail = isSuperUser ? selectedChatUser?.user_email : DEFAULT_ADMIN_EMAILS[0];
     if (!receiverEmail) return;
 
     const { error } = await supabase
@@ -338,16 +336,19 @@ export default function FinanzasDRMIA() {
       .insert([{
         sender_id: user.id,
         sender_email: user.email,
-        receiver_id: isSuperUser ? selectedChatUser.user_id : user.id,
+        // el cliente no conoce el id del admin: el destinatario se identifica por email
+        receiver_id: isSuperUser ? selectedChatUser.user_id : null,
         receiver_email: receiverEmail,
-        message: newChatMessage.trim(),
+        message: newChatMessage.trim().slice(0, 2000),
         is_read: false
       }]);
 
-    if (!error) {
-      setNewChatMessage('');
-      await loadChatMessages(receiverEmail);
+    if (error) {
+      alert('No se pudo enviar el mensaje: ' + error.message);
+      return;
     }
+    setNewChatMessage('');
+    await loadChatMessages(receiverEmail);
   }
 
   async function handleAuth(e: React.FormEvent) {
@@ -358,24 +359,20 @@ export default function FinanzasDRMIA() {
 
     try {
       if (authMode === 'login') {
-        const { data, error } = await supabase.auth.signInWithPassword({
+        const { error } = await supabase.auth.signInWithPassword({
           email: authEmail,
           password: authPassword,
         });
         if (error) throw error;
-        if (data?.user) {
-          setUser(data.user);
-          await evaluateAccessAndLoad(data.user);
-          await checkUnreadMessages(data.user);
-          setViewMode('app');
-        }
+        // La carga de datos la dispara onAuthStateChange (SIGNED_IN).
+        setViewMode('app');
       } else {
         const { error } = await supabase.auth.signUp({
           email: authEmail,
           password: authPassword,
         });
         if (error) throw error;
-        setAuthSuccess('¡Cuenta creada con éxito! Tenés 10 días gratis con acceso completo.');
+        setAuthSuccess('¡Cuenta creada con éxito! Revisá tu correo si te pedimos confirmar y luego iniciá sesión: tenés 10 días gratis con acceso completo.');
         setAuthMode('login');
       }
     } catch (err: any) {
@@ -393,38 +390,20 @@ export default function FinanzasDRMIA() {
     try {
       const formData = new FormData();
       formData.append('file', receiptFile);
+      formData.append('plan', selectedPlanToPay);
 
-      const res = await fetch('/api/verify-receipt', { method: 'POST', body: formData });
-      const analysis = await res.json();
-      if (!res.ok) throw new Error(analysis.error || 'Error al validar');
+      // El servidor valida monto, fecha, destino y duplicados, y registra el pago.
+      const res = await authFetch('/api/verify-payment', { method: 'POST', body: formData });
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || 'Error al validar el comprobante');
 
-      const isApproved = analysis.is_valid_transfer === true;
-      const amountPromo = selectedPlanToPay === 'pro' ? PLAN_PRO_PROMO : PLAN_ESENCIAL_PROMO;
+      if (data.receipt) setReceiptFeedback(data.receipt);
+      await evaluateAccessAndLoad(user);
 
-      const { data: inserted, error: insertError } = await supabase
-        .from('payment_receipts')
-        .insert([{
-          user_id: user.id,
-          user_email: user.email,
-          amount: analysis.amount || amountPromo,
-          transfer_date: analysis.transfer_date || new Date().toISOString().split('T')[0],
-          sender_name: analysis.sender_name || 'No determinado',
-          alias_destination: analysis.destination || 'drm-ia',
-          ai_status: isApproved ? 'approved_by_ai' : 'rejected_by_ai',
-          ai_notes: `Plan: ${selectedPlanToPay.toUpperCase()} (Promo 40% OFF). Veredicto: ${analysis.reason || 'Sin detalles'}`,
-          admin_status: 'pending'
-        }])
-        .select()
-        .single();
-
-      if (insertError) throw insertError;
-
-      setReceiptFeedback(inserted);
-      if (isApproved) {
-        setHasPaidPlan(true);
-        alert('¡Comprobante verificado con éxito por IA! Se activó tu suscripción bonificada.');
+      if (data.approved) {
+        alert('¡Comprobante verificado con éxito! Tu suscripción quedó activa por 30 días.');
       } else {
-        alert('Comprobante recibido. La IA lo derivó a revisión manual.');
+        alert('No pudimos aprobar el comprobante automáticamente:\n- ' + (data.reasons || []).join('\n- ') + '\n\nPodés subir otro comprobante o escribirnos por el chat.');
       }
     } catch (err: any) {
       alert('Error al enviar comprobante: ' + err.message);
@@ -435,35 +414,47 @@ export default function FinanzasDRMIA() {
   }
 
   async function handleVerifyByAdmin(receiptId: string, status: 'verified' | 'rejected') {
-    const { error } = await supabase
-      .from('payment_receipts')
-      .update({ admin_status: status })
-      .eq('id', receiptId);
-
-    if (!error) {
+    const res = await authFetch('/api/admin/overview', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: receiptId, status }),
+    });
+    const data = await readJson(res);
+    if (res.ok) {
       await loadAdminMetrics();
       alert(`Comprobante marcado como: ${status === 'verified' ? 'Verificado' : 'Rechazado'}`);
+    } else {
+      alert('No se pudo actualizar: ' + (data.error || res.status));
     }
   }
 
+  function requirePro(): boolean {
+    if (isPro) return true;
+    alert('Esta función es parte del Plan Pro IA. Podés cambiar de plan desde tu próximo pago.');
+    return false;
+  }
+
   async function handleRunAIDiagnosis() {
+    if (!requirePro()) return;
     setIsLoadingDiagnosis(true);
     setIsDiagnosisOpen(true);
     setAiDiagnosis('');
 
     try {
-      const res = await fetch('/api/financial-audit', {
+      const res = await authFetch('/api/financial-audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           income: totalIncome,
           expense: totalExpense,
-          debt: totalDebtArs,
+          debt: totalDebtMode,
+          currency: currencyMode,
           transactions: filteredTransactions,
           profileType: profileType === 'business' ? 'Comercio / PyME' : 'Personal'
         })
       });
-      const data = await res.json();
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || 'No se pudo generar el diagnóstico');
       setAiDiagnosis(data.diagnosis || 'Auditoría completada sin observaciones.');
     } catch (e: any) {
       setAiDiagnosis('Error conectando con el auditor de IA: ' + e.message);
@@ -473,21 +464,59 @@ export default function FinanzasDRMIA() {
   }
 
   async function refreshAll(userId: string) {
-    const { data: tx } = await supabase.from('transactions').select('*').eq('user_id', userId).order('date', { ascending: false });
-    if (tx) {
-      setTransactions(tx);
-      if (tx.length > 0 && selectedMonth === 'all') {
-        const latestDate = tx[0].date ? tx[0].date.substring(0, 7) : 'all';
-        setSelectedMonth(latestDate);
-      }
+    const [txRes, cardsRes, loansRes] = await Promise.all([
+      supabase.from('transactions').select('*').eq('user_id', userId).order('date', { ascending: false }),
+      supabase.from('credit_cards').select('*').eq('user_id', userId),
+      supabase.from('loans').select('*').eq('user_id', userId),
+    ]);
+
+    if (txRes.error || cardsRes.error || loansRes.error) {
+      console.error('Error cargando datos:', txRes.error || cardsRes.error || loansRes.error);
+      setDataError('No pudimos cargar todos tus datos. Revisá tu conexión e intentá de nuevo.');
+    } else {
+      setDataError('');
     }
 
-    const { data: cards } = await supabase.from('credit_cards').select('*').eq('user_id', userId);
-    if (cards) setCreditCards(cards);
-
-    const { data: ln } = await supabase.from('loans').select('*').eq('user_id', userId);
-    if (ln) setLoans(ln);
+    if (txRes.data) {
+      setTransactions(txRes.data);
+      // Solo la primera vez se elige el último mes; después se respeta la elección del usuario.
+      if (!monthInitialized.current && txRes.data.length > 0) {
+        monthInitialized.current = true;
+        setSelectedMonth(txRes.data[0].date ? txRes.data[0].date.substring(0, 7) : 'all');
+      }
+    }
+    if (cardsRes.data) setCreditCards(cardsRes.data);
+    if (loansRes.data) setLoans(loansRes.data);
   }
+
+  useEffect(() => {
+    // Importante: NO hacer await de consultas de Supabase dentro de este callback
+    // (puede dejar la app colgada). Se difiere con setTimeout.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED') return;
+      if (session?.user) {
+        const u = session.user;
+        setUser((prev: any) => (prev?.id === u.id ? prev : u));
+        setViewMode('app');
+        setTimeout(() => { bootstrapUser(u); }, 0);
+      } else {
+        bootstrappedFor.current = null;
+        monthInitialized.current = false;
+        setUser(null);
+        setAccess(null);
+        setTransactions([]);
+        setCreditCards([]);
+        setLoans([]);
+        setSelectedMonth('all');
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleAddTransaction(e: React.FormEvent) {
     e.preventDefault();
@@ -504,7 +533,7 @@ export default function FinanzasDRMIA() {
       income_source: transType === 'income' ? incomeSource : null,
       credit_card_id: transType === 'expense' && selectedCardId ? selectedCardId : null,
       loan_id: transType === 'expense' && selectedLoanId ? selectedLoanId : null,
-      date: customDate || new Date().toISOString().split('T')[0]
+      date: customDate || todayLocal()
     };
 
     const { error } = await supabase.from('transactions').insert([payload]);
@@ -545,7 +574,8 @@ export default function FinanzasDRMIA() {
     const { error } = await supabase
       .from('transactions')
       .update(payload)
-      .eq('id', editingTransaction.id);
+      .eq('id', editingTransaction.id)
+      .eq('user_id', user.id);
 
     if (!error) {
       setEditingTransaction(null);
@@ -570,13 +600,15 @@ export default function FinanzasDRMIA() {
       credit_limit: parseFloat(newCardLimitArs || '0')
     }]);
 
-    if (!error) {
-      setNewCardName('');
-      setNewCardLimitArs('');
-      setNewCardLimitUsd('');
-      setIsCardModalOpen(false);
-      refreshAll(user.id);
+    if (error) {
+      alert('No se pudo guardar la tarjeta: ' + error.message);
+      return;
     }
+    setNewCardName('');
+    setNewCardLimitArs('');
+    setNewCardLimitUsd('');
+    setIsCardModalOpen(false);
+    refreshAll(user.id);
   }
 
   async function handleCreateLoan(e: React.FormEvent) {
@@ -593,14 +625,16 @@ export default function FinanzasDRMIA() {
       due_day: 10
     }]);
 
-    if (!error) {
-      setNewLoanEntity('');
-      setNewLoanTotal('');
-      setNewLoanInstallment('');
-      setIsLoanModalOpen(false);
-      refreshAll(user.id);
-      alert('¡Entidad/Billetera agregada correctamente!');
+    if (error) {
+      alert('No se pudo guardar: ' + error.message);
+      return;
     }
+    setNewLoanEntity('');
+    setNewLoanTotal('');
+    setNewLoanInstallment('');
+    setIsLoanModalOpen(false);
+    refreshAll(user.id);
+    alert('¡Entidad/Billetera agregada correctamente!');
   }
 
   function openEditCard(card: any) {
@@ -608,7 +642,7 @@ export default function FinanzasDRMIA() {
     setEditCardName(card.name);
     setEditCardClosing(String(card.closing_day || '20'));
     setEditCardDue(String(card.due_day || '5'));
-    setEditCardLimitArs(String(card.balance_ars || card.credit_limit || '0'));
+    setEditCardLimitArs(String(cardBalanceArs(card)));
     setEditCardLimitUsd(String(card.balance_usd || '0'));
     setIsEditCardModalOpen(true);
   }
@@ -627,30 +661,47 @@ export default function FinanzasDRMIA() {
         balance_usd: parseFloat(editCardLimitUsd || '0'),
         credit_limit: parseFloat(editCardLimitArs || '0')
       })
-      .eq('id', editingCardId);
+      .eq('id', editingCardId)
+      .eq('user_id', user.id);
 
-    if (!error) {
-      setIsEditCardModalOpen(false);
-      setEditingCardId(null);
-      refreshAll(user.id);
+    if (error) {
+      alert('No se pudo actualizar la tarjeta: ' + error.message);
+      return;
     }
+    setIsEditCardModalOpen(false);
+    setEditingCardId(null);
+    refreshAll(user.id);
   }
 
   async function handleDeleteCard(cardId: string) {
-    if (!confirm('¿Deseas eliminar esta tarjeta?')) return;
-    const { error } = await supabase.from('credit_cards').delete().eq('id', cardId);
-    if (!error && user) refreshAll(user.id);
+    if (!user) return;
+    if (!confirm('¿Deseas eliminar esta tarjeta? Sus movimientos se conservan, pero quedarán sin tarjeta asignada.')) return;
+    // primero se desvinculan los movimientos para no dejar referencias rotas
+    const { error: unlinkError } = await supabase
+      .from('transactions').update({ credit_card_id: null }).eq('credit_card_id', cardId).eq('user_id', user.id);
+    if (unlinkError) { alert('No se pudo desvincular los movimientos: ' + unlinkError.message); return; }
+    const { error } = await supabase.from('credit_cards').delete().eq('id', cardId).eq('user_id', user.id);
+    if (error) { alert('No se pudo eliminar la tarjeta: ' + error.message); return; }
+    refreshAll(user.id);
   }
 
   async function handleDeleteLoan(loanId: string) {
-    if (!confirm('¿Deseas eliminar esta billetera o préstamo?')) return;
-    const { error } = await supabase.from('loans').delete().eq('id', loanId);
-    if (!error && user) refreshAll(user.id);
+    if (!user) return;
+    if (!confirm('¿Deseas eliminar esta billetera o préstamo? Sus movimientos se conservan.')) return;
+    const { error: unlinkError } = await supabase
+      .from('transactions').update({ loan_id: null }).eq('loan_id', loanId).eq('user_id', user.id);
+    if (unlinkError) { alert('No se pudo desvincular los movimientos: ' + unlinkError.message); return; }
+    const { error } = await supabase.from('loans').delete().eq('id', loanId).eq('user_id', user.id);
+    if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+    refreshAll(user.id);
   }
 
   async function handleDelete(id: string) {
-    const { error } = await supabase.from('transactions').delete().eq('id', id);
-    if (!error && user) refreshAll(user.id);
+    if (!user) return;
+    if (!confirm('¿Eliminar este movimiento?')) return;
+    const { error } = await supabase.from('transactions').delete().eq('id', id).eq('user_id', user.id);
+    if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+    refreshAll(user.id);
   }
 
   function openImportForEntity(type: 'card' | 'loan', id: string, name: string) {
@@ -663,6 +714,7 @@ export default function FinanzasDRMIA() {
 
   async function handleExecuteAIImport() {
     if (!importText.trim() && !importFile) return;
+    if (!requirePro()) return;
     setUploading(true);
 
     try {
@@ -670,53 +722,57 @@ export default function FinanzasDRMIA() {
       if (importFile) {
         const formData = new FormData();
         formData.append('file', importFile);
-        res = await fetch('/api/parse-statement', { method: 'POST', body: formData });
+        res = await authFetch('/api/parse-statement', { method: 'POST', body: formData });
       } else {
-        res = await fetch('/api/parse-statement', {
+        res = await authFetch('/api/parse-statement', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ raw_text: importText }),
         });
       }
 
-      // Protección contra cortes de respuesta o timeouts
-      const rawText = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(rawText);
-      } catch (_err) {
-        throw new Error('El servidor tardó demasiado en responder. Reintenta la subida.');
-      }
-
+      const data = await readJson(res);
       if (!res.ok) {
         throw new Error(data.error || 'Error procesando datos con IA');
       }
 
       if (data.items && Array.isArray(data.items)) {
-        const enrichedItems = data.items.map((item: any) => {
-          let cleanAmount = typeof item.amount === 'number' 
-            ? item.amount 
-            : parseFloat(String(item.amount || '0').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]+/g, '')) || 0;
-          
-          cleanAmount = Math.abs(cleanAmount);
-          const itemDate = item.date || '';
-          const itemDesc = (item.description || '').trim().toLowerCase();
+        // Detección de duplicados por multiconjunto: cada movimiento ya guardado "consume"
+        // una sola coincidencia, así dos compras idénticas legítimas no se descartan,
+        // pero re-importar el mismo período sí marca todo como duplicado.
+        const normDesc = (d: string) =>
+          (d || '').replace(/^\[(USD|NEGOCIO)\]\s*/i, '').trim().toLowerCase().slice(0, 12);
+        const keyOf = (date: string, amount: number, cur: string, desc: string) =>
+          `${date}|${amount.toFixed(2)}|${cur}|${normDesc(desc)}`;
 
-          const isDuplicate = transactions.some(tx => 
-            tx.date === itemDate && 
-            Math.abs(Number(tx.amount)) === cleanAmount &&
-            (tx.description || '').trim().toLowerCase().includes(itemDesc.substring(0, 10))
-          );
+        const existing = new Map<string, number>();
+        transactions
+          .filter(tx => {
+            if (targetEntityForImport?.type === 'card') return tx.credit_card_id === targetEntityForImport.id;
+            if (targetEntityForImport?.type === 'loan') return tx.loan_id === targetEntityForImport.id;
+            return true;
+          })
+          .forEach(tx => {
+            const k = keyOf(tx.date || '', Math.abs(Number(tx.amount)), tx.currency || 'ARS', tx.description || '');
+            existing.set(k, (existing.get(k) || 0) + 1);
+          });
+
+        data.items = data.items.map((item: any) => {
+          const cleanAmount = Math.abs(Number(item.amount) || 0);
+          const itemDate = item.date || todayLocal();
+          const k = keyOf(itemDate, cleanAmount, item.currency || 'ARS', item.description || '');
+          const left = existing.get(k) || 0;
+          const isDuplicate = left > 0;
+          if (isDuplicate) existing.set(k, left - 1);
 
           return {
             ...item,
+            date: itemDate,
             amount: cleanAmount,
             isDuplicate,
             selectedCategory: item.category || (item.operation_type === 'refund' ? 'Otros' : 'Por Clasificar')
           };
         });
-
-        data.items = enrichedItems;
       }
 
       setMigrationData(data);
@@ -751,7 +807,7 @@ export default function FinanzasDRMIA() {
     setIsSavingBatch(true);
 
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = todayLocal();
       const validItems = migrationData.items.filter((item: any) => !item.isDuplicate);
 
       if (validItems.length === 0) {
@@ -761,20 +817,8 @@ export default function FinanzasDRMIA() {
         return;
       }
 
-      let assignedCardId = targetEntityForImport?.type === 'card' ? targetEntityForImport.id : null;
-      let assignedLoanId = targetEntityForImport?.type === 'loan' ? targetEntityForImport.id : null;
-
-      // Si se extrajo el resumen de tarjeta, actualizar saldos bimonetarios de esa tarjeta
-      if (assignedCardId && (migrationData.total_ars !== undefined || migrationData.total_usd !== undefined)) {
-        await supabase
-          .from('credit_cards')
-          .update({
-            balance_ars: migrationData.total_ars ?? 0,
-            balance_usd: migrationData.total_usd ?? 0,
-            credit_limit: migrationData.total_ars ?? 0
-          })
-          .eq('id', assignedCardId);
-      }
+      const assignedCardId = targetEntityForImport?.type === 'card' ? targetEntityForImport.id : null;
+      const assignedLoanId = targetEntityForImport?.type === 'loan' ? targetEntityForImport.id : null;
 
       const rows = validItems.map((item: any) => {
         const isOpRefund = item.operation_type === 'refund';
@@ -807,13 +851,32 @@ export default function FinanzasDRMIA() {
       const { error: txError } = await supabase.from('transactions').insert(rows);
       if (txError) throw txError;
 
+      // Los saldos se actualizan DESPUÉS de guardar los movimientos y solo si el resumen
+      // trae el total (antes, un total faltante pisaba el saldo real con 0).
+      let balanceWarning = '';
+      if (assignedCardId) {
+        const upd: Record<string, number> = {};
+        if (migrationData.total_ars !== null && migrationData.total_ars !== undefined) {
+          upd.balance_ars = Number(migrationData.total_ars);
+          upd.credit_limit = Number(migrationData.total_ars);
+        }
+        if (migrationData.total_usd !== null && migrationData.total_usd !== undefined) {
+          upd.balance_usd = Number(migrationData.total_usd);
+        }
+        if (Object.keys(upd).length > 0) {
+          const { error: balError } = await supabase
+            .from('credit_cards').update(upd).eq('id', assignedCardId).eq('user_id', currentSessionUser.id);
+          if (balError) balanceWarning = '\n\nAtención: los movimientos se guardaron pero no se pudo actualizar el saldo de la tarjeta (' + balError.message + ').';
+        }
+      }
+
       setIsImportModalOpen(false);
       setMigrationData(null);
       setImportText('');
       setImportFile(null);
       setTargetEntityForImport(null);
       await refreshAll(currentSessionUser.id);
-      alert(`¡Éxito! Se incorporaron ${rows.length} operaciones distinguiendo compras, pagos y reintegros.`);
+      alert(`¡Éxito! Se incorporaron ${rows.length} operaciones distinguiendo compras, pagos y reintegros.` + balanceWarning);
     } catch (err: any) {
       alert('Error al guardar: ' + err.message);
     } finally {
@@ -838,45 +901,85 @@ export default function FinanzasDRMIA() {
     });
   }, [transactions, selectedMonth, profileType]);
 
+  // Convierte un monto a la moneda elegida en el header (cotización editable).
+  const toMode = useCallback((amountVal: number, cur?: string): number => {
+    const c: Cur = cur === 'USD' ? 'USD' : 'ARS';
+    if (c === currencyMode) return amountVal;
+    return c === 'USD' ? amountVal * usdRate : amountVal / usdRate;
+  }, [currencyMode, usdRate]);
+  const sumMode = useCallback(
+    (list: any[]) => list.reduce((acc, t) => acc + toMode(Number(t.amount || 0), t.currency), 0),
+    [toMode]
+  );
+
+  // Ingresos reales: sin pagos de tarjeta (transferencias) ni reintegros.
   const incomeTransactions = useMemo(() => {
-    return filteredTransactions.filter(t => t.type === 'income');
+    return filteredTransactions.filter(t => t.type === 'income' && !isTransfer(t) && !isRefund(t));
   }, [filteredTransactions]);
 
-  const totalIncome = useMemo(() => {
-    return incomeTransactions.reduce((acc, t) => acc + Number(t.amount || 0), 0);
-  }, [incomeTransactions]);
+  const purchaseTransactions = useMemo(() => {
+    return filteredTransactions.filter(t => t.type === 'expense' && !isTransfer(t) && !isRefund(t));
+  }, [filteredTransactions]);
 
+  const totalIncome = useMemo(() => sumMode(incomeTransactions), [incomeTransactions, sumMode]);
+
+  // Gasto neto: compras menos reintegros/devoluciones.
   const totalExpense = useMemo(() => {
-    return filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + Number(t.amount || 0), 0);
-  }, [filteredTransactions]);
+    const refunds = sumMode(filteredTransactions.filter(t => isRefund(t) && !isTransfer(t)));
+    return Math.max(0, sumMode(purchaseTransactions) - refunds);
+  }, [filteredTransactions, purchaseTransactions, sumMode]);
 
   const netBalance = totalIncome - totalExpense;
 
-  // Deuda total en Pesos y Dólares
+  // Deuda de tarjetas: ARS y USD por separado para mostrar, y consolidada para los KPIs.
   const totalDebtArs = useMemo(() => {
-    return creditCards.reduce((acc, c) => acc + Number(c.balance_ars || c.credit_limit || 0), 0);
+    return creditCards.reduce((acc, c) => acc + cardBalanceArs(c), 0);
   }, [creditCards]);
 
   const totalDebtUsd = useMemo(() => {
     return creditCards.reduce((acc, c) => acc + Number(c.balance_usd || 0), 0);
   }, [creditCards]);
 
+  const totalDebtMode = useMemo(() => {
+    return toMode(totalDebtArs, 'ARS') + toMode(totalDebtUsd, 'USD');
+  }, [totalDebtArs, totalDebtUsd, toMode]);
+
+  // Peso de la deuda: saldo de tarjetas ÷ ingresos del período.
   const debtRatio = useMemo(() => {
     if (totalIncome <= 0) return 0;
-    return (totalDebtArs / totalIncome) * 100;
-  }, [totalDebtArs, totalIncome]);
+    return (Math.max(totalDebtMode, 0) / totalIncome) * 100;
+  }, [totalDebtMode, totalIncome]);
 
   const savingsRate = useMemo(() => {
     if (totalIncome <= 0) return 0;
     return ((totalIncome - totalExpense) / totalIncome) * 100;
   }, [totalIncome, totalExpense]);
 
-  const dailyAverageExpense = useMemo(() => {
-    const now = new Date();
-    const currentDay = Math.max(now.getDate(), 1);
-    return totalExpense / currentDay;
-  }, [totalExpense]);
+  // Días transcurridos y días del período según el mes elegido (no siempre el mes actual).
+  const periodInfo = useMemo(() => {
+    if (selectedMonth === 'all') {
+      let first = '';
+      let last = '';
+      for (const t of filteredTransactions) {
+        if (!t.date) continue;
+        if (!first || t.date < first) first = t.date;
+        if (!last || t.date > last) last = t.date;
+      }
+      if (!first || first === last) return { elapsed: 30, total: 30 };
+      const span = Math.round((new Date(last).getTime() - new Date(first).getTime()) / 86400000) + 1;
+      return { elapsed: Math.max(span, 1), total: 30 };
+    }
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const total = new Date(y, m, 0).getDate();
+    const isCurrent = todayLocal().startsWith(selectedMonth);
+    return { elapsed: isCurrent ? Math.max(new Date().getDate(), 1) : total, total };
+  }, [selectedMonth, filteredTransactions]);
 
+  const dailyAverageExpense = useMemo(() => {
+    return totalExpense / periodInfo.elapsed;
+  }, [totalExpense, periodInfo]);
+
+  // Cuántos días de gasto cubre el superávit del período (no es un saldo bancario).
   const survivalDays = useMemo(() => {
     if (dailyAverageExpense <= 0) return 999;
     const availableCash = Math.max(netBalance, 0);
@@ -884,8 +987,8 @@ export default function FinanzasDRMIA() {
   }, [netBalance, dailyAverageExpense]);
 
   const projectedMonthEndExpense = useMemo(() => {
-    return dailyAverageExpense * 30;
-  }, [dailyAverageExpense]);
+    return dailyAverageExpense * periodInfo.total;
+  }, [dailyAverageExpense, periodInfo]);
 
   function formatMoney(amountVal: number, curr: 'ARS' | 'USD' = 'ARS') {
     if (curr === 'USD') {
@@ -895,24 +998,24 @@ export default function FinanzasDRMIA() {
   }
 
   const expenseDataByCategory = useMemo(() => {
-    return filteredTransactions
-      .filter(t => t.type === 'expense')
+    return purchaseTransactions
       .reduce((acc: any[], item) => {
         const catName = item.category || 'Otros';
+        const val = toMode(Number(item.amount || 0), item.currency);
         const existing = acc.find(c => c.name === catName);
         if (existing) {
-          existing.value += Number(item.amount || 0);
+          existing.value += val;
         } else {
-          acc.push({ name: catName, value: Number(item.amount || 0) });
+          acc.push({ name: catName, value: val });
         }
         return acc;
       }, []);
-  }, [filteredTransactions]);
+  }, [purchaseTransactions, toMode]);
 
   const transactionsOfSelectedCategory = useMemo(() => {
     if (!selectedCategoryDetail) return [];
-    return filteredTransactions.filter(t => t.type === 'expense' && (t.category || 'Otros') === selectedCategoryDetail);
-  }, [filteredTransactions, selectedCategoryDetail]);
+    return purchaseTransactions.filter(t => (t.category || 'Otros') === selectedCategoryDetail);
+  }, [purchaseTransactions, selectedCategoryDetail]);
 
   // ==========================================
   // RENDER: LANDING PAGE DE VENTA CON PROMO 40% OFF
@@ -1046,7 +1149,7 @@ export default function FinanzasDRMIA() {
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Todo lo incluido en el Plan Esencial</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador IA con detección de compras, pagos y reintegros</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Manejo independiente de saldos en ARS y USD</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Auditor Financiero IA ("Diagnóstico Mensual")</li>
+                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Auditor Financiero IA (&quot;Diagnóstico Mensual&quot;)</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Simulador Bola de Nieve para deudas</li>
                   <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte y chat directo con Dionicio</li>
                 </ul>
@@ -1064,6 +1167,14 @@ export default function FinanzasDRMIA() {
         <footer className="border-t border-slate-800/80 py-8 text-center text-xs text-slate-500">
           © 2026 DRM-IA • Soluciones Integrales e Inteligencia Artificial • Río Gallegos
         </footer>
+      </div>
+    );
+  }
+
+  if (loading || (user && !access)) {
+    return (
+      <div className="min-h-screen bg-[#08121f] text-slate-100 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-[#00D7FF]" />
       </div>
     );
   }
@@ -1158,7 +1269,7 @@ export default function FinanzasDRMIA() {
   // ==========================================
   // RENDER: PANTALLA DE PAGO
   // ==========================================
-  if (user && !isSuperUser && !isTrialActive && !hasPaidPlan) {
+  if (user && access?.status === 'expired') {
     return (
       <div className="min-h-screen bg-[#08121f] text-slate-100 flex items-center justify-center p-4 font-sans">
         <div className="bg-[#0B192C] max-w-xl w-full p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-6">
@@ -1208,6 +1319,12 @@ export default function FinanzasDRMIA() {
             </p>
           </div>
 
+          {receiptFeedback?.ai_status === 'rejected_by_ai' && (
+            <div className="bg-amber-500/10 border border-amber-500/30 text-amber-200 text-[11px] p-3 rounded-xl">
+              Último comprobante no aprobado: {receiptFeedback.ai_notes}
+            </div>
+          )}
+
           <form onSubmit={handleUploadReceipt} className="space-y-3">
             <div className="border-2 border-dashed border-slate-700 rounded-2xl p-4 text-center hover:border-[#00D7FF] transition-colors">
               <input 
@@ -1220,7 +1337,7 @@ export default function FinanzasDRMIA() {
               <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-1.5">
                 <UploadCloud className="w-8 h-8 text-[#00D7FF]" />
                 <span className="text-xs font-semibold text-slate-300">
-                  {receiptFile ? `Archivo: ${receiptFile.name}` : 'Subir comprobante de transferencia al alias drm-ia'}
+                  {receiptFile ? `Archivo: ${receiptFile.name}` : 'Subir comprobante (imagen o PDF, máx. 4 MB) de la transferencia al alias drm-ia'}
                 </span>
               </label>
             </div>
@@ -1272,7 +1389,7 @@ export default function FinanzasDRMIA() {
                     )}
                     {hasPaidPlan && (
                       <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
-                        Plan Activo (40% OFF)
+                        {`Plan ${access?.plan === 'pro' ? 'Pro IA' : 'Esencial'} activo`}{access?.paidUntil ? ` · hasta ${new Date(access.paidUntil).toLocaleDateString('es-AR')}` : ''}
                       </span>
                     )}
                   </>
@@ -1309,6 +1426,18 @@ export default function FinanzasDRMIA() {
             >
               <DollarSign className="w-3.5 h-3.5 text-emerald-600" /> {currencyMode}
             </button>
+            <label className="flex items-center gap-1 text-[10px] text-slate-500 bg-slate-100 px-2 py-1.5 rounded-xl border border-slate-200" title="Cotización usada para convertir entre pesos y dólares">
+              u$s 1 =
+              <input
+                type="number"
+                min="1"
+                step="1"
+                defaultValue={usdRate}
+                key={usdRate}
+                onBlur={e => updateUsdRate(e.target.value)}
+                className="w-16 bg-transparent text-xs font-bold text-slate-700 outline-none"
+              />
+            </label>
 
             <button 
               onClick={() => { setIsChatModalOpen(true); loadChatMessages(); }}
@@ -1361,6 +1490,13 @@ export default function FinanzasDRMIA() {
           </div>
         </header>
 
+        {dataError && (
+          <div className="bg-amber-50 border border-amber-300 text-amber-800 text-xs rounded-xl p-3 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {dataError}
+            <button onClick={() => user && refreshAll(user.id)} className="ml-auto underline font-semibold cursor-pointer">Reintentar</button>
+          </div>
+        )}
+
         {/* Auditor IA */}
         <div className="bg-gradient-to-r from-[#0B192C] to-[#132238] p-4 rounded-2xl border border-slate-800 flex flex-wrap justify-between items-center gap-3">
           <div className="flex items-center gap-3">
@@ -1374,7 +1510,7 @@ export default function FinanzasDRMIA() {
           </div>
           <div className="flex items-center gap-2">
             <button 
-              onClick={() => setIsSnowballModalOpen(true)}
+              onClick={() => { if (requirePro()) setIsSnowballModalOpen(true); }}
               className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-700"
             >
               <Calculator className="w-3.5 h-3.5 text-[#00D7FF]" /> Plan Bola de Nieve
@@ -1399,10 +1535,10 @@ export default function FinanzasDRMIA() {
           >
             <div>
               <div className="flex items-center gap-1.5">
-                <p className="text-xs text-slate-400">Total Ingresos ({selectedMonth})</p>
+                <p className="text-xs text-slate-400">Total Ingresos ({selectedMonth === 'all' ? 'histórico' : selectedMonth})</p>
                 <Eye className="w-3 h-3 text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
-              <h3 className="text-xl font-bold text-emerald-600">{formatMoney(totalIncome)}</h3>
+              <h3 className="text-xl font-bold text-emerald-600">{formatMoney(totalIncome, currencyMode)}</h3>
               <p className="text-[10px] text-emerald-600 font-semibold mt-0.5">Toca para ver desglose ➔</p>
             </div>
             <ArrowUpCircle className="w-8 h-8 text-emerald-500 opacity-20 group-hover:opacity-80 transition-all" />
@@ -1410,8 +1546,8 @@ export default function FinanzasDRMIA() {
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
-              <p className="text-xs text-slate-400">Total Gastos ({selectedMonth})</p>
-              <h3 className="text-xl font-bold text-rose-600">{formatMoney(totalExpense)}</h3>
+              <p className="text-xs text-slate-400">Gastos netos ({selectedMonth === 'all' ? 'histórico' : selectedMonth})</p>
+              <h3 className="text-xl font-bold text-rose-600">{formatMoney(totalExpense, currencyMode)}</h3>
             </div>
             <ArrowDownCircle className="w-8 h-8 text-rose-500 opacity-20" />
           </div>
@@ -1420,7 +1556,7 @@ export default function FinanzasDRMIA() {
             <div>
               <p className="text-xs text-slate-400">Superávit del Período</p>
               <h3 className={`text-xl font-bold ${netBalance >= 0 ? 'text-blue-600' : 'text-amber-600'}`}>
-                {formatMoney(netBalance)}
+                {formatMoney(netBalance, currencyMode)}
               </h3>
             </div>
             <Wallet className="w-8 h-8 text-blue-500 opacity-20" />
@@ -1444,12 +1580,12 @@ export default function FinanzasDRMIA() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
             <div className="flex justify-between items-center">
-              <span className="text-xs text-slate-400">Ratio de Endeudamiento</span>
-              <span className={`w-3 h-3 rounded-full ${debtRatio < 30 ? 'bg-emerald-500' : debtRatio <= 50 ? 'bg-amber-500' : 'bg-rose-500'}`}></span>
+              <span className="text-xs text-slate-400">Deuda / Ingresos del período</span>
+              <span className={`w-3 h-3 rounded-full ${debtRatio < 50 ? 'bg-emerald-500' : debtRatio <= 100 ? 'bg-amber-500' : 'bg-rose-500'}`}></span>
             </div>
             <div className="text-2xl font-black text-slate-900">{debtRatio.toFixed(1)}%</div>
             <p className="text-[10px] text-slate-400">
-              {debtRatio < 30 ? '🟢 Saludable (<30%)' : debtRatio <= 50 ? '🟡 Alerta (30-50%)' : '🔴 Crítico (>50%)'}
+              {debtRatio < 50 ? '🟢 Saludable (<50% del ingreso)' : debtRatio <= 100 ? '🟡 Alerta (50-100%)' : '🔴 Crítico (>100%)'}
             </p>
           </div>
 
@@ -1464,11 +1600,11 @@ export default function FinanzasDRMIA() {
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
             <div className="flex justify-between items-center">
-              <span className="text-xs text-slate-400">Días de Supervivencia</span>
+              <span className="text-xs text-slate-400">Días de Cobertura</span>
               <Clock className="w-4 h-4 text-blue-500" />
             </div>
             <div className="text-2xl font-black text-blue-600">{survivalDays} días</div>
-            <p className="text-[10px] text-slate-400">Duración con saldo líquido actual</p>
+            <p className="text-[10px] text-slate-400">Superávit del período ÷ gasto diario</p>
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
@@ -1476,8 +1612,8 @@ export default function FinanzasDRMIA() {
               <span className="text-xs text-slate-400">Gasto Diario / Proyección</span>
               <BarChart3 className="w-4 h-4 text-indigo-500" />
             </div>
-            <div className="text-lg font-black text-slate-900">{formatMoney(dailyAverageExpense)}/día</div>
-            <p className="text-[10px] text-slate-400">Cierre estimado: {formatMoney(projectedMonthEndExpense)}</p>
+            <div className="text-lg font-black text-slate-900">{formatMoney(dailyAverageExpense, currencyMode)}/día</div>
+            <p className="text-[10px] text-slate-400">Cierre estimado: {formatMoney(projectedMonthEndExpense, currencyMode)}</p>
           </div>
         </div>
 
@@ -1526,7 +1662,7 @@ export default function FinanzasDRMIA() {
                         {/* Saldos Bimonetarios: Ambos siempre visibles */}
                         <div className="mt-1 space-y-0.5 pt-1 border-t border-slate-100">
                           <p className="text-[11px] font-bold text-rose-600">
-                            Deuda ARS: {formatMoney(Number(c.balance_ars || c.credit_limit || 0), 'ARS')}
+                            Deuda ARS: {formatMoney(cardBalanceArs(c), 'ARS')}
                           </p>
                           <p className={`text-[11px] font-bold ${isUsdNegative ? 'text-emerald-600' : valUsd > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
                             Saldo USD: {formatMoney(valUsd, 'USD')} {isUsdNegative ? '(A favor)' : ''}
@@ -1771,7 +1907,7 @@ export default function FinanzasDRMIA() {
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(value: any) => formatMoney(Number(value))} />
+                    <Tooltip formatter={(value: any) => formatMoney(Number(value), currencyMode)} />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
@@ -1790,7 +1926,7 @@ export default function FinanzasDRMIA() {
                 >
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></span>
                   <span className="text-slate-800">{entry.name}:</span>
-                  <span className="font-bold text-slate-900">{formatMoney(entry.value)}</span>
+                  <span className="font-bold text-slate-900">{formatMoney(entry.value, currencyMode)}</span>
                   <Eye className="w-3 h-3 text-slate-400 ml-0.5" />
                 </button>
               ))}
@@ -2143,7 +2279,7 @@ export default function FinanzasDRMIA() {
                     Desglose de Ingresos ({selectedMonth})
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    {incomeTransactions.length} registros que suman {formatMoney(totalIncome)}
+                    {incomeTransactions.length} registros que suman {formatMoney(totalIncome, currencyMode)}
                   </p>
                 </div>
               </div>
@@ -2203,10 +2339,10 @@ export default function FinanzasDRMIA() {
                 <ListFilter className="w-5 h-5 text-blue-600" />
                 <div>
                   <h3 className="text-base font-bold text-slate-900">
-                    Desglose: Rubro "{selectedCategoryDetail}"
+                    Desglose: Rubro &quot;{selectedCategoryDetail}&quot;
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    {transactionsOfSelectedCategory.length} gastos que suman {formatMoney(transactionsOfSelectedCategory.reduce((acc, t) => acc + Number(t.amount || 0), 0))}
+                    {transactionsOfSelectedCategory.length} gastos que suman {formatMoney(sumMode(transactionsOfSelectedCategory), currencyMode)}
                   </p>
                 </div>
               </div>
@@ -2459,11 +2595,14 @@ export default function FinanzasDRMIA() {
             <div className="space-y-3 text-xs text-slate-300">
               <p>Tu deuda consolidada activa es de: <strong className="text-rose-400 text-sm">{formatMoney(totalDebtArs, 'ARS')}</strong></p>
               <div className="p-4 bg-[#132238] rounded-2xl border border-slate-700 space-y-2">
-                <span className="font-bold text-[#00D7FF]">Orden recomendado de liquidación de pasivos:</span>
-                {creditCards.map((c, i) => (
+                <span className="font-bold text-[#00D7FF]">Método bola de nieve: pagá primero el saldo más chico y sumá esa cuota al siguiente.</span>
+                {[...creditCards].sort((a, b) => cardBalanceArs(a) - cardBalanceArs(b)).map((c, i) => (
                   <div key={c.id} className="flex justify-between items-center p-2.5 bg-slate-900/80 rounded-xl border border-slate-800">
                     <span>{i + 1}. {c.name} (Vence día {c.due_day})</span>
-                    <span className="font-bold text-rose-400">{formatMoney(Number(c.balance_ars || c.credit_limit || 0), 'ARS')}</span>
+                    <span className="font-bold text-rose-400">
+                      {formatMoney(cardBalanceArs(c), 'ARS')}
+                      {Number(c.balance_usd || 0) !== 0 && <span className="block text-[10px] text-slate-400">{formatMoney(Number(c.balance_usd), 'USD')}</span>}
+                    </span>
                   </div>
                 ))}
               </div>

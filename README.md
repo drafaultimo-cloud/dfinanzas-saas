@@ -1,36 +1,21 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DRM-IA Finanzas
 
-## Getting Started
+SaaS de control de finanzas personales y de comercios (pesos y dólares) con IA: importación de extractos, auditor financiero y suscripción por transferencia. Next.js 16 · Supabase · Google Gemini.
 
-First, run the development server:
+## Puesta en marcha
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1. `npm install`
+2. Copiar `.env.example` a `.env.local` y completar las variables (en Vercel, las mismas en *Settings → Environment Variables*). `SUPABASE_SERVICE_ROLE_KEY` es secreta: sin ella los pagos y el panel admin no funcionan, y en producción las APIs de IA se bloquean.
+3. **Una sola vez:** ejecutar `supabase/migrations/001_seguridad_rls.sql` en Supabase → SQL Editor (activa RLS y agrega columnas). Leerlo antes: reemplaza las políticas existentes de las 5 tablas.
+4. `npm run dev`
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Cómo está protegido
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Todas las APIs (`/api/*`) exigen sesión de Supabase (`Authorization: Bearer`) y validan en el servidor la prueba/plan (`lib/access.ts`, la misma lógica que usa la interfaz).
+- Los pagos los registra el servidor (`/api/verify-payment`): comprueba monto ≥ plan, fecha reciente, destino y que el comprobante/número de operación no se haya usado. El rechazo manual del admin siempre anula la aprobación de la IA.
+- El panel de administrador usa `/api/admin/overview` (valida el email admin en el servidor).
+- Datos financieros: aislados por usuario con RLS (`auth.uid() = user_id`).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Planes
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Prueba de 10 días con acceso Pro; cada pago aprobado suma 30 días. Esencial no incluye importador IA, auditor ni bola de nieve (también se bloquea en el servidor).

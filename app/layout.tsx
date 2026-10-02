@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -9,7 +9,12 @@ export const metadata: Metadata = {
     icon: '/icon.svg',
     apple: '/icon.svg',
   },
+};
+
+export const viewport: Viewport = {
   themeColor: '#0B192C',
+  width: 'device-width',
+  initialScale: 1,
 };
 
 export default function RootLayout({
@@ -19,11 +24,6 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <head>
-        <link rel="manifest" href="/manifest.json" />
-        <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-        <meta name="theme-color" content="#0B192C" />
-      </head>
       <body>{children}</body>
     </html>
   );

@@ -831,8 +831,10 @@ export default function FinanzasDRMIA() {
         // pero re-importar el mismo período sí marca todo como duplicado.
         const normDesc = (d: string) =>
           (d || '').replace(/^\[(USD|NEGOCIO)\]\s*/i, '').trim().toLowerCase().slice(0, 12);
-        const keyOf = (date: string, amount: number, cur: string, desc: string) =>
-          `${date}|${amount.toFixed(2)}|${cur}|${normDesc(desc)}`;
+        // Reintegros y pagos se comparan por fecha, monto y tipo: cada banco los nombra distinto
+        // ("NOTA DE CREDITO GOOGLE" vs "[REINTEGRO] GOOGLE") y así no se duplican.
+        const keyOf = (date: string, amount: number, cur: string, desc: string, op?: string) =>
+          `${date}|${amount.toFixed(2)}|${cur}|${op === 'refund' || op === 'payment' ? `__${op}` : normDesc(desc)}`;
 
         const existing = new Map<string, number>();
         transactions
@@ -842,14 +844,14 @@ export default function FinanzasDRMIA() {
             return true;
           })
           .forEach(tx => {
-            const k = keyOf(tx.date || '', Math.abs(Number(tx.amount)), tx.currency || 'ARS', tx.description || '');
+            const k = keyOf(tx.date || '', Math.abs(Number(tx.amount)), tx.currency || 'ARS', tx.description || '', tx.operation_type);
             existing.set(k, (existing.get(k) || 0) + 1);
           });
 
         data.items = data.items.map((item: any) => {
           const cleanAmount = Math.abs(Number(item.amount) || 0);
           const itemDate = item.date || todayLocal();
-          const k = keyOf(itemDate, cleanAmount, item.currency || 'ARS', item.description || '');
+          const k = keyOf(itemDate, cleanAmount, item.currency || 'ARS', item.description || '', item.operation_type);
           const left = existing.get(k) || 0;
           const isDuplicate = left > 0;
           if (isDuplicate) existing.set(k, left - 1);
@@ -930,15 +932,15 @@ export default function FinanzasDRMIA() {
       let relinked = 0;
       if (!targetEntityForImport && (assignedCardId || assignedLoanId)) {
         const normD = (d: string) => (d || '').replace(/^\[(USD|NEGOCIO)\]\s*/i, '').trim().toLowerCase().slice(0, 12);
-        const kOf = (date: string, amt: number, cur: string, d: string) => `${date}|${amt.toFixed(2)}|${cur}|${normD(d)}`;
+        const kOf = (date: string, amt: number, cur: string, d: string, op?: string) => `${date}|${amt.toFixed(2)}|${cur}|${op === 'refund' || op === 'payment' ? `__${op}` : normD(d)}`;
         const loose = new Map<string, string[]>();
         transactions.filter(t => !t.credit_card_id && !t.loan_id).forEach(t => {
-          const k = kOf(t.date || '', Math.abs(Number(t.amount)), t.currency || 'ARS', t.description || '');
+          const k = kOf(t.date || '', Math.abs(Number(t.amount)), t.currency || 'ARS', t.description || '', t.operation_type);
           loose.set(k, [...(loose.get(k) || []), t.id]);
         });
         const idsToLink: string[] = [];
         migrationData.items.filter((i: any) => i.isDuplicate).forEach((i: any) => {
-          const k = kOf(i.date || '', Math.abs(Number(i.amount)), i.currency || 'ARS', i.description || '');
+          const k = kOf(i.date || '', Math.abs(Number(i.amount)), i.currency || 'ARS', i.description || '', i.operation_type);
           const list = loose.get(k);
           if (list && list.length) idsToLink.push(list.shift() as string);
         });

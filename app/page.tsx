@@ -830,7 +830,7 @@ export default function FinanzasDRMIA() {
         // una sola coincidencia, así dos compras idénticas legítimas no se descartan,
         // pero re-importar el mismo período sí marca todo como duplicado.
         const normDesc = (d: string) =>
-          (d || '').replace(/^\[(USD|NEGOCIO)\]\s*/i, '').trim().toLowerCase().slice(0, 12);
+          (d || '').replace(/^(\[(USD|NEGOCIO)\]\s*)+/i, '').trim().toLowerCase().slice(0, 12);
         // Reintegros y pagos se comparan por fecha, monto y tipo: cada banco los nombra distinto
         // ("NOTA DE CREDITO GOOGLE" vs "[REINTEGRO] GOOGLE") y así no se duplican.
         const keyOf = (date: string, amount: number, cur: string, desc: string, op?: string) =>
@@ -931,7 +931,7 @@ export default function FinanzasDRMIA() {
       // Movimientos ya guardados pero sin tarjeta (importes viejos): si el resumen los repite, se vinculan.
       let relinked = 0;
       if (!targetEntityForImport && (assignedCardId || assignedLoanId)) {
-        const normD = (d: string) => (d || '').replace(/^\[(USD|NEGOCIO)\]\s*/i, '').trim().toLowerCase().slice(0, 12);
+        const normD = (d: string) => (d || '').replace(/^(\[(USD|NEGOCIO)\]\s*)+/i, '').trim().toLowerCase().slice(0, 12);
         const kOf = (date: string, amt: number, cur: string, d: string, op?: string) => `${date}|${amt.toFixed(2)}|${cur}|${op === 'refund' || op === 'payment' ? `__${op}` : normD(d)}`;
         const loose = new Map<string, string[]>();
         transactions.filter(t => !t.credit_card_id && !t.loan_id).forEach(t => {

@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Profile, Tx } from '@/lib/planning';
+import { buildCategories, DEFAULT_CATEGORIES } from '@/lib/categories';
 
 export interface HubProps {
   supabase: SupabaseClient;
@@ -17,10 +18,7 @@ export interface HubProps {
   onChanged: () => void;     // recarga transacciones/tarjetas/billeteras
 }
 
-export const EXPENSE_CATEGORIES = [
-  'Supermercado', 'Alimentos', 'Servicios', 'Transporte', 'Salud', 'Educación', 'Hogar', 'Entretenimiento',
-  'Indumentaria', 'Impuestos', 'Envíos', 'Préstamos', 'Tarjeta de Crédito', 'Otros',
-];
+export const EXPENSE_CATEGORIES = DEFAULT_CATEGORIES;
 
 export function Card({ title, subtitle, right, children }: { title: string; subtitle?: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -50,10 +48,10 @@ export const inputCls = 'w-full text-xs border border-slate-200 rounded-xl p-2.5
 export const btnPrimary = 'px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl cursor-pointer';
 export const btnGhost = 'px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl cursor-pointer border border-slate-200';
 
-export function MigrationNotice({ table }: { table: string }) {
+export function MigrationNotice({ table, file = '008_planificacion.sql' }: { table: string; file?: string }) {
   return (
     <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
-      Falta crear la tabla <strong>{table}</strong>. Ejecutá la migración <strong>008_planificacion.sql</strong> en el SQL Editor de Supabase y recargá.
+      Falta crear la tabla <strong>{table}</strong>. Ejecutá la migración <strong>{file}</strong> en el SQL Editor de Supabase y recargá.
     </p>
   );
 }
@@ -84,4 +82,11 @@ export function useTable<T = any>(supabase: SupabaseClient, table: string, userI
 
 export function EmptyHint({ children }: { children: React.ReactNode }) {
   return <p className="text-xs text-slate-400 py-2">{children}</p>;
+}
+
+/** Lista de rubros del usuario: los base + los que creó + los que ya usa en sus movimientos. */
+export function useCategoryList(p: HubProps) {
+  const t = useTable<any>(p.supabase, 'user_categories', p.userId, 'created_at');
+  const cats = useMemo(() => buildCategories(t.rows.map((r: any) => r.name), p.transactions), [t.rows, p.transactions]);
+  return { cats, rows: t.rows, missing: t.missing, reload: t.reload };
 }

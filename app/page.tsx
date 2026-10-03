@@ -17,6 +17,8 @@ import { AccessState, computeAccess, isAdminEmail } from '@/lib/access';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import PlanningHub, { type Tab as PlanningTab } from '@/components/planning/PlanningHub';
 import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip';
+import CategorySelect, { saveUserCategory } from '@/components/CategorySelect';
+import { buildCategories } from '@/lib/categories';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
 import { applyRules, cleanDesc, computeNetWorth, findDuplicateGroups, findSimilarExisting } from '@/lib/planning';
 import { 
@@ -173,6 +175,7 @@ export default function FinanzasDRMIA() {
   const [viewingOwner, setViewingOwner] = useState<{ id: string; email: string } | null>(null);
   const viewingRef = useRef<{ id: string; email: string } | null>(null);
   const [categoryRules, setCategoryRules] = useState<any[]>([]);
+  const [userCategories, setUserCategories] = useState<string[]>([]);
   const planningJobsDone = useRef<string | null>(null);
   const [planningTab, setPlanningTab] = useState<PlanningTab | undefined>(undefined);
   const [newLoanAssetName, setNewLoanAssetName] = useState('');
@@ -594,6 +597,10 @@ export default function FinanzasDRMIA() {
     if (!viewingRef.current) {
       supabase.from('category_rules').select('*').eq('user_id', ownId).then(({ data, error }) => {
         if (!error && data) setCategoryRules(data);
+      });
+      supabase.from('user_categories').select('name').eq('user_id', ownId).then(({ data, error }) => {
+        // Se une con lo que ya hay en memoria: si la tabla todavía no existe, un rubro recién creado no se pierde.
+        if (!error && data) setUserCategories(prev => [...new Set([...data.map((r: any) => String(r.name)), ...prev])]);
       });
     }
     const [txRes, cardsRes, loansRes] = await Promise.all([
@@ -1521,6 +1528,22 @@ export default function FinanzasDRMIA() {
         return acc;
       }, []);
   }, [purchaseTransactions, toMode]);
+
+  // Rubros disponibles: los base + los propios + los que ya aparecen en los movimientos.
+  const allCategories = useMemo(() => buildCategories(userCategories, transactions), [userCategories, transactions]);
+
+  const createCategory = useCallback(async (name: string) => {
+    setUserCategories(prev => (prev.some(c => c.toLowerCase() === name.toLowerCase()) ? prev : [...prev, name]));
+    if (user) await saveUserCategory(supabase, user.id, name);
+  }, [user]);
+
+  // Cambia el rubro de un gasto desde el mismo listado (sin abrir el editor).
+  async function handleChangeCategory(txId: string, newCategory: string) {
+    if (!user) return;
+    const { error } = await supabase.from('transactions').update({ category: newCategory }).eq('id', txId).eq('user_id', user.id);
+    if (error) { alert('No se pudo cambiar el rubro: ' + error.message); return; }
+    setTransactions(prev => prev.map(t => (t.id === txId ? { ...t, category: newCategory } : t)));
+  }
 
   const transactionsOfSelectedCategory = useMemo(() => {
     if (!selectedCategoryDetail) return [];
@@ -2553,19 +2576,13 @@ export default function FinanzasDRMIA() {
               {transType === 'expense' ? (
                 <div>
                   <label className="text-xs text-slate-500">Rubro</label>
-                  <select 
-                    value={category} 
-                    onChange={e => setCategory(e.target.value)} 
+                  <CategorySelect
+                    value={category}
+                    categories={allCategories}
+                    onChange={setCategory}
+                    onCreate={createCategory}
                     className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
-                  >
-                    <option value="Servicios">Servicios / Facturas</option>
-                    <option value="Supermercado">Supermercado</option>
-                    <option value="Alimentos">Alimentos / Restaurantes</option>
-                    <option value="Transporte">Transporte / Combustible</option>
-                    <option value="Tarjeta de Crédito">Pago Tarjeta</option>
-                    <option value="Préstamos">Cuota Préstamo</option>
-                    <option value="Otros">Otros</option>
-                  </select>
+                  />
                 </div>
               ) : (
                 <div>
@@ -2695,7 +2712,18 @@ export default function FinanzasDRMIA() {
                       </div>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-[10px] text-slate-400">
                         <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
-                        <span>{t.category}</span>
+                        {t.type === 'expense' && t.operation_type !== 'transfer' && t.operation_type !== 'payment' ? (
+                          <CategorySelect
+                            value={t.category || 'Otros'}
+                            categories={allCategories}
+                            onChange={(v) => handleChangeCategory(t.id, v)}
+                            onCreate={createCategory}
+                            title="Cambiar el rubro de este gasto"
+                            className="text-[10px] max-w-[11rem] border border-slate-200 rounded-md px-1.5 py-0.5 bg-white text-slate-600 font-semibold cursor-pointer"
+                          />
+                        ) : (
+                          <span>{t.category}</span>
+                        )}
                         {isUsd && <span className="text-emerald-700 font-bold">u$s Dólares</span>}
                       </div>
                     </div>
@@ -3104,20 +3132,14 @@ export default function FinanzasDRMIA() {
                           )}
 
                           {item.operation_type === 'purchase' && (
-                            <select 
-                              value={item.selectedCategory} 
-                              onChange={(e) => handleUpdatePreviewCategory(idx, e.target.value)}
+                            <CategorySelect
+                              value={item.selectedCategory}
+                              categories={allCategories}
+                              allowPending
+                              onChange={(v) => handleUpdatePreviewCategory(idx, v)}
+                              onCreate={createCategory}
                               className={`text-xs border rounded-lg p-1.5 outline-none font-semibold ${item.selectedCategory === 'Por Clasificar' ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-slate-200 bg-white text-slate-700'}`}
-                            >
-                              <option value="Por Clasificar">⚠️ Por Clasificar</option>
-                              <option value="Servicios">Servicios / Facturas</option>
-                              <option value="Supermercado">Supermercado</option>
-                              <option value="Alimentos">Alimentos / Restaurantes</option>
-                              <option value="Transporte">Transporte / Combustible</option>
-                              <option value="Tarjeta de Crédito">Pago Tarjeta</option>
-                              <option value="Préstamos">Cuota Préstamo</option>
-                              <option value="Otros">Otros</option>
-                            </select>
+                            />
                           )}
                         </div>
                       </div>
@@ -3331,7 +3353,7 @@ export default function FinanzasDRMIA() {
         const byAccount = new Map<string, number>();
         purchases.forEach(t => byAccount.set(accName(t), (byAccount.get(accName(t)) || 0) + toMode(Number(t.amount), t.currency)));
         const accounts = [...byAccount.entries()].sort((a, b) => b[1] - a[1]);
-        const row = (t: any, sign: '-' | '+', color: string) => (
+        const row = (t: any, sign: '-' | '+', color: string, editable = false) => (
           <div key={t.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl flex justify-between items-start gap-3 text-xs">
             <div className="min-w-0 flex-1">
               <p className="font-semibold text-slate-800 break-words">{withProfile(t.description, false)}</p>
@@ -3339,6 +3361,18 @@ export default function FinanzasDRMIA() {
                 <span className="font-mono">{t.date}</span> • {t.category || 'Sin rubro'} • {accName(t)}
                 {t.currency === 'USD' && <span className="text-emerald-700 font-bold"> • u$s</span>}
               </p>
+              {editable && (
+                <div className="mt-1.5">
+                  <CategorySelect
+                    value={t.category || 'Otros'}
+                    categories={allCategories}
+                    onChange={(v) => handleChangeCategory(t.id, v)}
+                    onCreate={createCategory}
+                    title="Cambiar el rubro de este gasto"
+                    className="text-[10px] max-w-full border border-slate-200 rounded-md px-1.5 py-1 bg-white text-slate-600 font-semibold cursor-pointer"
+                  />
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <span className={`font-bold whitespace-nowrap ${color}`}>{sign}{formatMoney(Number(t.amount), t.currency || 'ARS')}</span>
@@ -3385,7 +3419,7 @@ export default function FinanzasDRMIA() {
 
                 <div className="space-y-2">
                   <p className="text-[11px] font-bold text-slate-700">Compras y gastos ({purchases.length})</p>
-                  {purchases.length === 0 ? <p className="text-xs text-slate-400 py-4 text-center">No hay gastos en este período.</p> : purchases.map(t => row(t, '-', 'text-rose-600'))}
+                  {purchases.length === 0 ? <p className="text-xs text-slate-400 py-4 text-center">No hay gastos en este período.</p> : purchases.map(t => row(t, '-', 'text-rose-600', true))}
                 </div>
 
                 {refunds.length > 0 && (
@@ -3561,6 +3595,16 @@ export default function FinanzasDRMIA() {
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold text-slate-800 break-words">{t.description}</p>
                       <p className="text-[10px] text-slate-400 font-mono mt-0.5">Fecha del movimiento: {t.date}</p>
+                      <div className="mt-1.5">
+                        <CategorySelect
+                          value={t.category || 'Otros'}
+                          categories={allCategories}
+                          onChange={(v) => handleChangeCategory(t.id, v)}
+                          onCreate={createCategory}
+                          title="Pasar este gasto a otro rubro"
+                          className="text-[10px] max-w-full border border-slate-200 rounded-md px-1.5 py-1 bg-white text-slate-600 font-semibold cursor-pointer"
+                        />
+                      </div>
                     </div>
                     <div className="flex items-center gap-2.5 shrink-0">
                       <span className="font-bold text-rose-600 whitespace-nowrap">
@@ -3661,19 +3705,13 @@ export default function FinanzasDRMIA() {
               {editTxType === 'expense' && (
                 <div>
                   <label className="text-xs text-slate-500">Cambiar Rubro</label>
-                  <select 
-                    value={editTxCategory} 
-                    onChange={e => setEditTxCategory(e.target.value)} 
+                  <CategorySelect
+                    value={editTxCategory}
+                    categories={allCategories}
+                    onChange={setEditTxCategory}
+                    onCreate={createCategory}
                     className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
-                  >
-                    <option value="Servicios">Servicios / Facturas</option>
-                    <option value="Supermercado">Supermercado</option>
-                    <option value="Alimentos">Alimentos / Restaurantes</option>
-                    <option value="Transporte">Transporte / Combustible</option>
-                    <option value="Tarjeta de Crédito">Pago Tarjeta</option>
-                    <option value="Préstamos">Cuota Préstamo</option>
-                    <option value="Otros">Otros</option>
-                  </select>
+                  />
                 </div>
               )}
 

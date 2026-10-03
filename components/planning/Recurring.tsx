@@ -4,10 +4,12 @@ import React, { useMemo, useState } from 'react';
 import { Trash2, Sparkles } from 'lucide-react';
 import { currentMonthOf, detectSubscriptions, formatArs } from '@/lib/planning';
 import { generateDueRecurring } from '@/lib/planning-client';
-import { btnGhost, btnPrimary, Card, EmptyHint, EXPENSE_CATEGORIES, HubProps, inputCls, MigrationNotice, useTable } from './ui';
+import CategorySelect, { saveUserCategory } from '../CategorySelect';
+import { btnGhost, btnPrimary, Card, EmptyHint, HubProps, inputCls, MigrationNotice, useCategoryList, useTable } from './ui';
 
 export default function Recurring(p: HubProps) {
   const { rows, missing, reload } = useTable<any>(p.supabase, 'recurring_items', p.userId, 'created_at');
+  const { cats, reload: reloadCats } = useCategoryList(p);
   const [desc, setDesc] = useState('');
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('ARS');
@@ -90,7 +92,13 @@ export default function Recurring(p: HubProps) {
             <select value={currency} onChange={e => setCurrency(e.target.value)} className={inputCls}><option>ARS</option><option>USD</option></select>
             <select value={type} onChange={e => setType(e.target.value)} className={inputCls}><option value="expense">Gasto</option><option value="income">Ingreso</option></select>
             {type === 'expense' && (
-              <select value={category} onChange={e => setCategory(e.target.value)} className={inputCls}>{EXPENSE_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
+              <CategorySelect
+                value={category}
+                categories={cats}
+                onChange={setCategory}
+                onCreate={async n => { await saveUserCategory(p.supabase, p.ownUserId, n); reloadCats(); }}
+                className={inputCls}
+              />
             )}
             <input type="number" min="1" max="31" value={day} onChange={e => setDay(e.target.value)} title="Día del mes" className={inputCls} />
             <select value={accountKey} onChange={e => setAccountKey(e.target.value)} className={inputCls}>

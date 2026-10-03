@@ -3,18 +3,15 @@
 import React, { useMemo, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { applyRules, cleanDesc } from '@/lib/planning';
-import { btnPrimary, Card, EmptyHint, EXPENSE_CATEGORIES, HubProps, inputCls, MigrationNotice, useTable } from './ui';
+import CategorySelect, { saveUserCategory } from '../CategorySelect';
+import { btnPrimary, Card, EmptyHint, HubProps, inputCls, MigrationNotice, useCategoryList, useTable } from './ui';
 
 export default function Rules(p: HubProps) {
   const { rows, missing, reload } = useTable<any>(p.supabase, 'category_rules', p.userId, 'created_at');
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState('Envíos');
   const [applied, setApplied] = useState('');
-  const cats = useMemo(() => {
-    const s = new Set<string>(EXPENSE_CATEGORIES);
-    p.transactions.forEach(t => { if (t.category && t.type === 'expense') s.add(t.category); });
-    return [...s].filter(c => c !== 'Por Clasificar');
-  }, [p.transactions]);
+  const { cats, reload: reloadCats } = useCategoryList(p);
   const pending = useMemo(
     () => p.transactions.filter(t => t.type === 'expense' && (t.category === 'Por Clasificar' || t.category === 'Otros') && applyRules(t.description, rows) && applyRules(t.description, rows) !== t.category),
     [p.transactions, rows]
@@ -61,7 +58,13 @@ export default function Rules(p: HubProps) {
         <>
           <form onSubmit={add} className="grid grid-cols-2 md:grid-cols-3 gap-2 pt-2 border-t border-slate-100">
             <input value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="Palabra (ej: correo argentino)" className={inputCls} required />
-            <select value={category} onChange={e => setCategory(e.target.value)} className={inputCls}>{cats.map(c => <option key={c}>{c}</option>)}</select>
+            <CategorySelect
+              value={category}
+              categories={cats}
+              onChange={setCategory}
+              onCreate={async n => { await saveUserCategory(p.supabase, p.ownUserId, n); reloadCats(); }}
+              className={inputCls}
+            />
             <button className={btnPrimary}>Agregar regla</button>
           </form>
           {pending.length > 0 && (

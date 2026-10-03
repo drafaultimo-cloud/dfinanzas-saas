@@ -3,7 +3,8 @@
 import React, { useMemo, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { budgetStatus, currentMonthOf, formatArs } from '@/lib/planning';
-import { Bar, btnPrimary, Card, EmptyHint, EXPENSE_CATEGORIES, HubProps, inputCls, MigrationNotice, useTable } from './ui';
+import CategorySelect, { saveUserCategory } from '../CategorySelect';
+import { Bar, btnPrimary, Card, EmptyHint, HubProps, inputCls, MigrationNotice, useCategoryList, useTable } from './ui';
 
 export default function Budgets(p: HubProps) {
   const { rows: budgets, missing, reload } = useTable(p.supabase, 'budgets', p.userId);
@@ -17,11 +18,7 @@ export default function Budgets(p: HubProps) {
     () => budgetStatus(budgets, p.transactions, month, p.profile, p.usdRate),
     [budgets, p.transactions, month, p.profile, p.usdRate]
   );
-  const cats = useMemo(() => {
-    const set = new Set<string>(EXPENSE_CATEGORIES);
-    p.transactions.forEach(t => { if (t.category && t.type === 'expense') set.add(t.category); });
-    return [...set].filter(c => c !== 'Por Clasificar');
-  }, [p.transactions]);
+  const { cats, reload: reloadCats } = useCategoryList(p);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -90,9 +87,13 @@ export default function Budgets(p: HubProps) {
         <form onSubmit={save} className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-slate-100 items-end">
           <label className="block">
             <span className="block text-[10px] text-slate-500 mb-0.5">Rubro</span>
-            <select value={category} onChange={e => setCategory(e.target.value)} className={inputCls}>
-              {cats.map(c => <option key={c}>{c}</option>)}
-            </select>
+            <CategorySelect
+              value={category}
+              categories={cats}
+              onChange={setCategory}
+              onCreate={async n => { await saveUserCategory(p.supabase, p.ownUserId, n); reloadCats(); }}
+              className={inputCls}
+            />
           </label>
           <label className="block">
             <span className="block text-[10px] text-slate-500 mb-0.5">Tope mensual</span>

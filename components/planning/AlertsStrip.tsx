@@ -2,9 +2,10 @@
 
 import React, { useMemo, useState } from 'react';
 import { budgetStatus, currentMonthOf, dailyDigest, formatArs, goalProgress, upcomingEvents } from '@/lib/planning';
+import { needsFxFix } from '@/lib/fx';
 import { HubProps, useTable } from './ui';
 
-export type AlertTarget = 'budgets' | 'dues' | 'goals' | 'add' | 'history';
+export type AlertTarget = 'budgets' | 'dues' | 'goals' | 'add' | 'history' | 'fx';
 
 interface AlertItem {
   key: string;
@@ -95,6 +96,10 @@ export default function AlertsStrip(p: HubProps & { onGo: (t: AlertTarget) => vo
     }
 
     // 5) Pendientes por completar
+    const fxPending = p.readOnly ? [] : p.transactions.filter(needsFxFix);
+    if (fxPending.length > 0) {
+      out.push({ key: 'fx', level: 'mid', icon: '💱', text: <><strong>{fxPending.length}</strong> movimiento{fxPending.length === 1 ? '' : 's'} parece{fxPending.length === 1 ? '' : 'n'} compra o venta de dólares y figura{fxPending.length === 1 ? '' : 'n'} como gasto o ingreso.</>, target: 'fx', action: 'Corregir' });
+    }
     if (!p.readOnly && d.unassignedTransfers > 0) {
       out.push({ key: 'unassigned', level: 'low', icon: '🔀', text: <><strong>{d.unassignedTransfers}</strong> transferencia{d.unassignedTransfers === 1 ? '' : 's'} sin asignar a qué cuenta fue o vino.</>, target: 'history', action: 'Asignar' });
     }

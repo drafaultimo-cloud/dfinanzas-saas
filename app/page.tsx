@@ -18,7 +18,9 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import PlanningHub, { type Tab as PlanningTab } from '@/components/planning/PlanningHub';
 import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip';
 import CategorySelect, { saveUserCategory } from '@/components/CategorySelect';
+import { isOlderStatement, reconcileTotal, statementCloseDate } from '@/lib/statement';
 import { buildCategories } from '@/lib/categories';
+import { FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
 import { applyRules, cleanDesc, computeNetWorth, findDuplicateGroups, findSimilarExisting } from '@/lib/planning';
 import { 
@@ -65,6 +67,7 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const fmtDate = (d?: string | null) => (d ? d.split('-').reverse().join('/') : '');
 const COLORS = ['#FF8042', '#00C49F', '#0088FE', '#faad14', '#8884d8', '#ff4d4f', '#13c2c2', '#a0d911'];
 
 type Cur = 'ARS' | 'USD';
@@ -207,7 +210,7 @@ export default function FinanzasDRMIA() {
   // 'linked' = asignados a esta tarjeta; 'unassigned' = sin tarjeta ni billetera (importes viejos); 'all' = todos
   const [movScope, setMovScope] = useState<'linked' | 'unassigned' | 'all'>('linked');
   const [editTxType, setEditTxType] = useState<'income' | 'expense'>('income');
-  const [editTxOpType, setEditTxOpType] = useState<'purchase' | 'payment' | 'refund' | 'income' | 'transfer'>('purchase');
+  const [editTxOpType, setEditTxOpType] = useState<'purchase' | 'payment' | 'refund' | 'income' | 'transfer' | 'fx'>('purchase');
   const [editTxCurrency, setEditTxCurrency] = useState<'ARS' | 'USD'>('ARS');
   const [editTxCategory, setEditTxCategory] = useState('Alimentos');
   const [editTxAmount, setEditTxAmount] = useState('');
@@ -769,7 +772,7 @@ export default function FinanzasDRMIA() {
   function openEditTransaction(tx: any) {
     setEditingTransaction(tx);
     setEditTxType(tx.type);
-    setEditTxOpType(tx.operation_type || 'purchase');
+    setEditTxOpType(isFxTx(tx) ? 'fx' : (tx.operation_type || 'purchase'));
     setEditTxCurrency(tx.currency || 'ARS');
     setEditTxCategory(tx.category || 'Otros');
     setEditTxAmount(String(tx.amount || '0'));
@@ -784,9 +787,9 @@ export default function FinanzasDRMIA() {
       description: editTxDescription,
       amount: parseFloat(editTxAmount) || 0,
       type: editTxType,
-      operation_type: editTxOpType,
+      operation_type: editTxOpType === 'fx' ? 'transfer' : editTxOpType,
       currency: editTxCurrency,
-      category: editTxType === 'expense' ? editTxCategory : 'Ingreso'
+      category: editTxOpType === 'fx' ? FX_CATEGORY : editTxType === 'expense' ? editTxCategory : 'Ingreso'
     };
 
     const { error } = await supabase
@@ -831,6 +834,7 @@ export default function FinanzasDRMIA() {
 
   // Las alertas de "Hoy en tu app" llevan directo a donde se resuelven.
   function goToAlert(t: AlertTarget) {
+    if (t === 'fx') { void fixFxTransactions(); return; }
     const tabs: Partial<Record<AlertTarget, PlanningTab>> = { budgets: 'presupuestos', dues: 'vencimientos', goals: 'metas' };
     const tab = tabs[t];
     if (tab) { setPlanningTab(tab); setSection('planificacion'); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -1181,6 +1185,16 @@ export default function FinanzasDRMIA() {
     if (!migrationData?.items) return;
     const updated = [...migrationData.items];
     const it = updated[index];
+    if (op === 'fx') {
+      // Compra/venta de moneda extranjera: es una transferencia propia que cambia de moneda, no un gasto.
+      it.operation_type = 'transfer';
+      it.fx = true;
+      if (it.direction !== 'in' && it.direction !== 'out') it.direction = 'out';
+      setMigrationData({ ...migrationData, items: updated });
+      return;
+    }
+    it.fx = false;
+    it.fxCounterAmount = undefined;
     it.operation_type = op;
     const isWalletImport = migrationData.entity_kind === 'wallet' || targetEntityForImport?.type === 'loan';
     if (op === 'purchase') it.direction = 'out';
@@ -1188,6 +1202,29 @@ export default function FinanzasDRMIA() {
     else if (op !== 'transfer') it.direction = 'in';
     if (op === 'purchase' && (!it.selectedCategory || it.selectedCategory === 'Tarjeta de Crédito')) it.selectedCategory = 'Por Clasificar';
     setMigrationData({ ...migrationData, items: updated });
+  }
+
+  // Dólares que entraron (o salieron) en un cambio de moneda: crea la otra punta en dólares al guardar.
+  function handleFxCounterAmount(index: number, raw: string) {
+    if (!migrationData?.items) return;
+    const updated = [...migrationData.items];
+    const n = parseFloat(raw);
+    updated[index] = { ...updated[index], fxCounterAmount: Number.isFinite(n) && n > 0 ? n : undefined };
+    setMigrationData({ ...migrationData, items: updated });
+  }
+
+  // Pasa a "Cambio de moneda" los movimientos ya cargados que eran compra o venta de dólares.
+  async function fixFxTransactions() {
+    if (!user) return;
+    const list = transactions.filter(needsFxFix);
+    if (list.length === 0) { alert('No encontré movimientos para corregir.'); return; }
+    const sample = list.slice(0, 3).map(t => `• ${cleanDesc(t.description).slice(0, 40)} (${formatMoney(Number(t.amount), t.currency || 'ARS')})`).join('\n');
+    if (!confirm(`Voy a pasar ${list.length} movimiento(s) a "Cambio de moneda", para que dejen de contar como gasto o ingreso:\n\n${sample}${list.length > 3 ? '\n…' : ''}`)) return;
+    const { error } = await supabase.from('transactions')
+      .update({ operation_type: 'transfer', category: FX_CATEGORY, income_source: null })
+      .in('id', list.map(t => t.id)).eq('user_id', user.id);
+    if (error) { alert('No se pudo corregir: ' + error.message); return; }
+    refreshAll(user.id);
   }
 
   function handleUpdatePreviewCategory(index: number, newCategory: string) {
@@ -1294,7 +1331,7 @@ export default function FinanzasDRMIA() {
         const finalCategory = op === 'purchase'
           ? (item.selectedCategory === 'Por Clasificar' ? 'Otros' : item.selectedCategory)
           : op === 'income' ? 'Ingreso'
-          : op === 'transfer' ? 'Transferencia propia'
+          : op === 'transfer' ? (item.fx ? FX_CATEGORY : 'Transferencia propia')
           : 'Tarjeta de Crédito';
 
         return {
@@ -1317,8 +1354,27 @@ export default function FinanzasDRMIA() {
         };
       });
 
+      // Cambio de moneda con los dólares informados: se crea la otra punta (en dólares) en la misma cuenta.
+      const fxRows = validItems
+        .filter((i: any) => i.fx && i.operation_type === 'transfer' && (i.currency || 'ARS') === 'ARS' && Number(i.fxCounterAmount) > 0)
+        .map((i: any) => ({
+          user_id: currentSessionUser.id,
+          description: `[USD] ${isInflow(i) ? 'Venta' : 'Compra'} de dólares · ${i.description}`.slice(0, 200),
+          amount: Number(i.fxCounterAmount),
+          currency: 'USD',
+          operation_type: 'transfer',
+          category: FX_CATEGORY,
+          type: isInflow(i) ? 'expense' : 'income',
+          income_source: null,
+          credit_card_id: assignedCardId,
+          loan_id: assignedLoanId,
+          date: (i.date && i.date.length === 10) ? i.date : today,
+          installment_number: 1,
+          total_installments: 1,
+        }));
+
       if (rows.length > 0) {
-        const { error: txError } = await supabase.from('transactions').insert(rows);
+        const { error: txError } = await supabase.from('transactions').insert([...rows, ...fxRows]);
         if (txError) throw txError;
       }
 
@@ -1341,7 +1397,15 @@ export default function FinanzasDRMIA() {
       // Los saldos se actualizan DESPUÉS de guardar los movimientos y solo si el resumen
       // trae el total (antes, un total faltante pisaba el saldo real con 0).
       let balanceWarning = '';
+      const closeDate = statementCloseDate(migrationData.statement_close_date, migrationData.items || []);
+      // Guarda el saldo y la fecha del resumen. Si la columna de fecha todavía no existe (migración 011), guarda solo el saldo.
+      const saveBalance = async (table: 'credit_cards' | 'loans', id: string, upd: Record<string, any>, extra: Record<string, any>) => {
+        let r = await supabase.from(table).update({ ...upd, ...extra }).eq('id', id).eq('user_id', currentSessionUser.id);
+        if (r.error && Object.keys(extra).length > 0) r = await supabase.from(table).update(upd).eq('id', id).eq('user_id', currentSessionUser.id);
+        return r.error;
+      };
       if (assignedCardId) {
+        const prevClose = creditCards.find(c => c.id === assignedCardId)?.last_statement_close;
         const upd: Record<string, number> = {};
         if (migrationData.total_ars !== null && migrationData.total_ars !== undefined) {
           upd.balance_ars = Number(migrationData.total_ars);
@@ -1350,21 +1414,26 @@ export default function FinanzasDRMIA() {
         if (migrationData.total_usd !== null && migrationData.total_usd !== undefined) {
           upd.balance_usd = Number(migrationData.total_usd);
         }
-        if (Object.keys(upd).length > 0) {
-          const { error: balError } = await supabase
-            .from('credit_cards').update(upd).eq('id', assignedCardId).eq('user_id', currentSessionUser.id);
+        if (isOlderStatement(closeDate, prevClose)) {
+          // Un resumen viejo no debe pisar la deuda de uno más nuevo.
+          if (Object.keys(upd).length > 0) balanceWarning = `\n\nEste resumen cerró el ${fmtDate(closeDate)} y ya tenías cargado uno más nuevo (cierre ${fmtDate(prevClose)}). Guardé los movimientos, pero NO cambié la deuda de la tarjeta.`;
+        } else if (Object.keys(upd).length > 0) {
+          const balError = await saveBalance('credit_cards', assignedCardId, upd,
+            { last_statement_close: closeDate, last_statement_due: migrationData.statement_due_date || null });
           if (balError) balanceWarning = '\n\nAtención: los movimientos se guardaron pero no se pudo actualizar el saldo de la tarjeta (' + balError.message + ').';
         }
       }
 
       // Billetera / cuenta: se guarda el dinero disponible al cierre del extracto.
       if (assignedLoanId) {
+        const prevClose = loans.find(l => l.id === assignedLoanId)?.last_statement_close;
         const upd: Record<string, number> = {};
         if (migrationData.total_ars !== null && migrationData.total_ars !== undefined) upd.balance_ars = Number(migrationData.total_ars);
         if (migrationData.total_usd !== null && migrationData.total_usd !== undefined) upd.balance_usd = Number(migrationData.total_usd);
-        if (Object.keys(upd).length > 0) {
-          const { error: balError } = await supabase
-            .from('loans').update(upd).eq('id', assignedLoanId).eq('user_id', currentSessionUser.id);
+        if (isOlderStatement(closeDate, prevClose)) {
+          if (Object.keys(upd).length > 0) balanceWarning = `\n\nEste extracto cierra el ${fmtDate(closeDate)} y ya tenías cargado uno más nuevo (${fmtDate(prevClose)}). Guardé los movimientos, pero NO cambié el dinero disponible de la cuenta.`;
+        } else if (Object.keys(upd).length > 0) {
+          const balError = await saveBalance('loans', assignedLoanId, upd, { last_statement_close: closeDate });
           if (balError) balanceWarning = '\n\nAtención: los movimientos se guardaron pero no se pudo actualizar el saldo de la billetera (' + balError.message + ').';
         }
       }
@@ -2278,6 +2347,9 @@ export default function FinanzasDRMIA() {
                           <p className="text-[11px] font-bold text-rose-600">
                             Deuda ARS: {formatMoney(cardBalanceArs(c), 'ARS')}
                           </p>
+                          {c.last_statement_close && (
+                            <p className="text-[10px] text-slate-400">Resumen al {fmtDate(c.last_statement_close)}{c.last_statement_due ? ` · vence ${fmtDate(c.last_statement_due)}` : ''}</p>
+                          )}
                           <p className={`text-[11px] font-bold ${isUsdNegative ? 'text-emerald-600' : valUsd > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
                             Saldo USD: {formatMoney(valUsd, 'USD')} {isUsdNegative ? '(A favor)' : ''}
                           </p>
@@ -2707,7 +2779,9 @@ export default function FinanzasDRMIA() {
                           <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Pago Tarjeta</span>
                         )}
                         {t.operation_type === 'transfer' && (
-                          <span className="bg-violet-100 text-violet-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Transferencia propia</span>
+                          <span className="bg-violet-100 text-violet-800 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                            {isFxTx(t) ? `💱 ${fxLabel(t)} · no cuenta` : 'Transferencia propia'}
+                          </span>
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-[10px] text-slate-400">
@@ -2732,7 +2806,7 @@ export default function FinanzasDRMIA() {
                     </span>
                   </div>
 
-                  {(t.operation_type === 'transfer' || t.operation_type === 'payment') && (
+                  {(t.operation_type === 'transfer' || t.operation_type === 'payment') && !isFxTx(t) && (
                     <select
                       value={t.transfer_account || ''}
                       onChange={e => setTransferAccount(t.id, e.target.value)}
@@ -3004,22 +3078,53 @@ export default function FinanzasDRMIA() {
                     </div>
                   </div>
                 )}
-                {/* Resumen de totales detectados en el PDF */}
-                {(migrationData.total_ars !== undefined || migrationData.total_usd !== undefined) && (
-                  <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl text-xs flex justify-between items-center">
-                    <span className="font-bold text-indigo-950">Totales Liquidados en Resumen:</span>
-                    <div className="flex gap-4">
-                      {migrationData.total_ars !== undefined && (
-                        <span className="font-extrabold text-slate-900">Total ARS: {formatMoney(Number(migrationData.total_ars), 'ARS')}</span>
+                {/* Totales leídos del resumen: se pueden corregir antes de guardar */}
+                {(() => {
+                  const isCardStmt = targetEntityForImport
+                    ? targetEntityForImport.type === 'card'
+                    : importLink.startsWith('card:') || importLink === 'new-card' ? true
+                    : importLink.startsWith('loan:') || importLink === 'new-loan' ? false
+                    : migrationData.entity_kind !== 'wallet';
+                  const rc = isCardStmt ? reconcileTotal(migrationData.total_ars, migrationData.items || []) : null;
+                  const close = statementCloseDate(migrationData.statement_close_date, migrationData.items || []);
+                  const setTotal = (key: 'total_ars' | 'total_usd', raw: string) => {
+                    const n = raw === '' ? null : parseFloat(raw);
+                    setMigrationData({ ...migrationData, [key]: n === null || Number.isNaN(n) ? null : n });
+                  };
+                  return (
+                    <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl text-xs space-y-2">
+                      <div>
+                        <p className="font-bold text-indigo-950">{isCardStmt ? 'Total a pagar de este resumen' : 'Dinero disponible al cierre'}</p>
+                        <p className="text-[11px] text-slate-500">
+                          Revisá que coincida con tu resumen; si no, corregilo acá.
+                          {close ? ` Cierre: ${fmtDate(close)}` : ''}{migrationData.statement_due_date ? ` · vence ${fmtDate(migrationData.statement_due_date)}` : ''}
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="block text-[10px] text-slate-500 mb-0.5">Pesos ($)</span>
+                          <input type="number" step="0.01" value={migrationData.total_ars ?? ''} onChange={e => setTotal('total_ars', e.target.value)} placeholder="No cambiar" className="w-full text-xs border border-slate-200 rounded-lg p-2 outline-none bg-white font-bold" />
+                        </label>
+                        <label className="block">
+                          <span className="block text-[10px] text-slate-500 mb-0.5">Dólares (u$s, negativo = a favor)</span>
+                          <input type="number" step="0.01" value={migrationData.total_usd ?? ''} onChange={e => setTotal('total_usd', e.target.value)} placeholder="No cambiar" className="w-full text-xs border border-slate-200 rounded-lg p-2 outline-none bg-white font-bold" />
+                        </label>
+                      </div>
+                      {rc?.mismatch && (
+                        <div className="bg-amber-50 border border-amber-300 rounded-lg p-2.5 space-y-1.5">
+                          <p className="text-[11px] text-amber-900 break-words">
+                            <strong>Ojo:</strong> el total leído ({formatMoney(Number(migrationData.total_ars), 'ARS')}) no coincide con la suma de los movimientos ({formatMoney(rc.sum, 'ARS')}).
+                            Puede ser que se haya tomado el importe de otro resumen, o que haya saldo anterior o intereses. Verificalo contra el PDF antes de guardar.
+                          </p>
+                          <button type="button" onClick={() => setTotal('total_ars', String(rc.sum))} className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg bg-amber-600 text-white cursor-pointer">
+                            Usar la suma de movimientos
+                          </button>
+                        </div>
                       )}
-                      {migrationData.total_usd !== undefined && (
-                        <span className={`font-extrabold ${Number(migrationData.total_usd) < 0 ? 'text-emerald-700' : 'text-slate-900'}`}>
-                          Total USD: {formatMoney(Number(migrationData.total_usd), 'USD')}
-                        </span>
-                      )}
+                      <p className="text-[10px] text-slate-400">Si dejás un campo vacío, ese saldo no se modifica.</p>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
                   <span className="font-semibold text-slate-700">Operaciones identificadas: {migrationData.items?.length || 0}</span>
@@ -3063,7 +3168,7 @@ export default function FinanzasDRMIA() {
                             )}
                             {isOwnTransfer && (
                               <span className="bg-violet-100 text-violet-800 text-[10px] font-bold px-2 py-0.5 rounded">
-                                Transferencia propia (no cuenta)
+                                {item.fx ? `${fxLabel({ type: isIn ? 'income' : 'expense', currency: item.currency })} (no cuenta)` : 'Transferencia propia (no cuenta)'}
                               </span>
                             )}
                             {isDup && (
@@ -3082,12 +3187,12 @@ export default function FinanzasDRMIA() {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-                          <span className={`font-bold ${isIn ? 'text-emerald-600' : 'text-slate-900'}`}>
+                        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-between sm:justify-end min-w-0">
+                          <span className={`font-bold whitespace-nowrap ${isIn ? 'text-emerald-600' : 'text-slate-900'}`}>
                             {isIn ? '+' : '-'}{formatMoney(item.amount, isUsd ? 'USD' : 'ARS')}
                           </span>
 
-                          {(true) && (
+                          {(
                             <button
                               type="button"
                               onClick={() => handleToggleDuplicate(idx)}
@@ -3100,7 +3205,7 @@ export default function FinanzasDRMIA() {
 
                           {!isDup && (
                             <select
-                              value={item.operation_type}
+                              value={item.fx ? 'fx' : item.operation_type}
                               onChange={(e) => handleChangePreviewOp(idx, e.target.value)}
                               title="Cambiar el tipo de movimiento"
                               className="text-xs border border-slate-200 rounded-lg p-1.5 outline-none bg-white text-slate-700"
@@ -3108,12 +3213,26 @@ export default function FinanzasDRMIA() {
                               <option value="purchase">Gasto</option>
                               <option value="income">Ingreso</option>
                               <option value="transfer">Transferencia propia</option>
+                              <option value="fx">Compra/venta de dólares</option>
                               <option value="payment">Pago de tarjeta</option>
                               <option value="refund">Reintegro</option>
                             </select>
                           )}
 
-                          {!isDup && (item.operation_type === 'transfer' || item.operation_type === 'payment') && (
+                          {!isDup && item.fx && item.currency !== 'USD' && (
+                            <label className="flex items-center gap-1.5 text-[10px] text-slate-500 w-full sm:w-auto">
+                              {isIn ? 'u$s entregados' : 'u$s recibidos'}
+                              <input
+                                type="number" step="0.01" min="0"
+                                value={item.fxCounterAmount ?? ''}
+                                onChange={e => handleFxCounterAmount(idx, e.target.value)}
+                                placeholder={`≈ ${(Math.abs(Number(item.amount)) / (usdRate || 1)).toFixed(2)} (opcional)`}
+                                className="w-32 text-xs border border-violet-200 rounded-lg px-2 py-1 outline-none bg-white text-slate-800"
+                              />
+                            </label>
+                          )}
+
+                          {!isDup && !item.fx && (item.operation_type === 'transfer' || item.operation_type === 'payment') && (
                             <select
                               value={item.counterpart || ''}
                               onChange={e => handleChangePreviewCounterpart(idx, e.target.value)}
@@ -3252,7 +3371,7 @@ export default function FinanzasDRMIA() {
                 ) : rows.map(t => {
                   const biz = isBusinessDesc(t.description);
                   const isIn = t.type === 'income';
-                  const label = t.operation_type === 'transfer' ? 'Transferencia propia' : isTransfer(t) ? 'Pago de tarjeta' : isRefund(t) ? 'Reintegro' : null;
+                  const label = t.operation_type === 'transfer' ? (isFxTx(t) ? fxLabel(t) : 'Transferencia propia') : isTransfer(t) ? 'Pago de tarjeta' : isRefund(t) ? 'Reintegro' : null;
                   return (
                     <div key={t.id} className={`p-2.5 border rounded-xl flex items-center gap-2.5 text-xs ${biz ? 'bg-indigo-50/50 border-indigo-100' : 'bg-slate-50 border-slate-100'}`}>
                       <input
@@ -3690,7 +3809,7 @@ export default function FinanzasDRMIA() {
                   onChange={(e: any) => {
                     const op = e.target.value;
                     setEditTxOpType(op);
-                    if (op !== 'transfer') setEditTxType(op === 'purchase' ? 'expense' : 'income');
+                    if (op !== 'transfer' && op !== 'fx') setEditTxType(op === 'purchase' ? 'expense' : 'income');
                   }} 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
                 >
@@ -3699,6 +3818,7 @@ export default function FinanzasDRMIA() {
                   <option value="refund">Reintegro / Nota de Crédito (Saldo a favor)</option>
                   <option value="income">Ingreso real (rendimiento, cobro, transferencia de terceros)</option>
                   <option value="transfer">Transferencia entre mis cuentas (no cuenta)</option>
+                  <option value="fx">Compra/venta de dólares (cambio de moneda, no cuenta)</option>
                 </select>
               </div>
 

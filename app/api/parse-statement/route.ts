@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { STATEMENT_CATEGORIES, todayLocal } from '@/lib/config';
+import { fxDirectionFromDescription, isFxDescription } from '@/lib/fx';
 import {
   ApiError,
   GEMINI_MODEL,
@@ -26,7 +27,7 @@ Fecha de hoy: ${today}. Extraé TODOS los movimientos, distinguiendo con precisi
    - "payment": pagos del resumen de una tarjeta ("PAGO EN PESOS", "PAGO VENCIMIENTO EN DOLARES", "CANCELACION ANTICIPADA", "Pago de resumen Tarjeta ...", "Pago anticipado Tarjeta ...").
    - "refund": reintegros, devoluciones, bonificaciones, notas de crédito, importes negativos en una tarjeta.
    - "income": dinero que ENTRA como ingreso real: rendimientos o intereses ganados, transferencias recibidas de OTRAS personas, depósitos, cobros, sueldos.
-   - "transfer": transferencia entre cuentas PROPIAS del titular (enviada o recibida) cuando el nombre de la contraparte coincide con el del titular del documento. No es ingreso ni gasto.
+   - "transfer": transferencia entre cuentas PROPIAS del titular (enviada o recibida) cuando el nombre de la contraparte coincide con el del titular del documento. No es ingreso ni gasto. También es "transfer" la compra o venta de moneda extranjera (por ejemplo "DEB.CPRA.VTA.M.E.LINK", "Compra de dólares", "Venta de moneda extranjera"): es pasar plata propia de una moneda a otra, no un gasto.
 2. currency: "USD" si figura en columna U$S/USS o indica dólares; "ARS" si son pesos.
 3. total_ars / total_usd: en un resumen de TARJETA, el TOTAL A PAGAR del resumen ACTUAL, que es el que cierra en la fecha más reciente del documento ("Tu total a pagar es", "Total a pagar", "Total" al final del detalle de consumos), en pesos y en dólares (negativo si está a favor). NUNCA uses el importe del resumen anterior (frases como "tu resumen anterior cerró... por $X", "pago del resumen anterior", "del mes pasado") ni el pago mínimo. En un extracto de CUENTA o BILLETERA, el dinero final disponible al cierre del período ("Dinero final", "Total disponible final"), en pesos y en dólares. null si no figura.
 3b. statement_close_date: fecha de cierre del resumen o extracto ACTUAL en formato YYYY-MM-DD (en una tarjeta, "El resumen actual cerró el 27/09"; en una cuenta, la última fecha del período). statement_due_date: fecha de vencimiento del pago ("vence el 10/10/26") o null. Si no figuran, null.
@@ -76,10 +77,14 @@ function normalizeStatement(raw: any) {
       if (amount < 0 && op === 'purchase') op = 'refund'; // importe negativo = crédito
       amount = Math.abs(amount);
       const desc = String(it?.description || '');
-      if (isOwnTransfer(desc)) op = 'transfer';
+      const fx = isFxDescription(desc);
+      if (fx) op = 'transfer';
+      else if (isOwnTransfer(desc)) op = 'transfer';
       else if (op === 'refund' && /transferencia recibida|rendimiento|dep[oó]sito|acreditaci/i.test(desc)) op = 'income';
       let direction: 'in' | 'out' = it?.direction === 'in' ? 'in' : it?.direction === 'out' ? 'out' : (op === 'purchase' ? 'out' : 'in');
-      if (op === 'transfer' && it?.direction !== 'in' && it?.direction !== 'out') direction = /recib/i.test(desc) ? 'in' : 'out';
+      if (op === 'transfer' && it?.direction !== 'in' && it?.direction !== 'out') direction = fx ? (fxDirectionFromDescription(desc) || 'out') : /recib/i.test(desc) ? 'in' : 'out';
+      // El código del banco manda: DEB = sale plata, CRE = entra plata.
+      if (fx && fxDirectionFromDescription(desc)) direction = fxDirectionFromDescription(desc) as 'in' | 'out';
       if (op === 'purchase') direction = 'out';
       else if (op === 'refund' || op === 'income') direction = 'in';
       // El pago de una tarjeta ENTRA al resumen de la tarjeta, pero SALE de la billetera/cuenta desde donde se pagó.
@@ -98,6 +103,7 @@ function normalizeStatement(raw: any) {
         category: cats.has(it?.category) ? it.category : 'Por Clasificar',
         installment_number: instN,
         total_installments: instT,
+        ...(fx ? { fx: true } : {}),
       };
     })
     .filter(Boolean);

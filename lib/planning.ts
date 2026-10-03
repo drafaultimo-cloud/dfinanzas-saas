@@ -304,7 +304,7 @@ export function dailyDigest(txs: Tx[], profile: Profile, usdRate: number, today:
     if (!t.date || txProfile(t) !== profile) continue;
     if (t.date <= ymd(t0) && (!last || t.date > last)) last = t.date;
     if (isTransferTx(t)) {
-      if (!t.transfer_account && t.operation_type === 'transfer') unassigned++;
+      if (!t.transfer_account && t.operation_type === 'transfer' && t.category !== 'Cambio de moneda') unassigned++;
       continue;
     }
     if (t.type === 'income' && !isRefundTx(t)) continue;

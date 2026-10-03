@@ -10,7 +10,7 @@ export const DEFAULT_CATEGORIES = [
   'Indumentaria', 'Impuestos', 'Envíos', 'Préstamos', 'Tarjeta de Crédito', 'Otros',
 ];
 
-const RESERVED = new Set(['por clasificar', 'ingreso']);
+const RESERVED = new Set(['por clasificar', 'ingreso', 'cambio de moneda']);
 const LABELS: Record<string, string> = {
   Servicios: 'Servicios / Facturas',
   Alimentos: 'Alimentos / Restaurantes',

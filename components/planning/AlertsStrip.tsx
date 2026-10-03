@@ -3,9 +3,10 @@
 import React, { useMemo, useState } from 'react';
 import { budgetStatus, currentMonthOf, dailyDigest, formatArs, goalProgress, upcomingEvents } from '@/lib/planning';
 import { needsFxFix, needsOwnTransferFix } from '@/lib/fx';
+import { suggestTransferPairs } from '@/lib/transfers';
 import { HubProps, useTable } from './ui';
 
-export type AlertTarget = 'budgets' | 'dues' | 'goals' | 'add' | 'history' | 'fx' | 'owntransfer';
+export type AlertTarget = 'budgets' | 'dues' | 'goals' | 'add' | 'history' | 'fx' | 'owntransfer' | 'pairs';
 
 interface AlertItem {
   key: string;
@@ -103,6 +104,10 @@ export default function AlertsStrip(p: HubProps & { onGo: (t: AlertTarget) => vo
     const fxPending = p.readOnly ? [] : p.transactions.filter(needsFxFix);
     if (fxPending.length > 0) {
       out.push({ key: 'fx', level: 'mid', icon: '💱', text: <><strong>{fxPending.length}</strong> movimiento{fxPending.length === 1 ? '' : 's'} parece{fxPending.length === 1 ? '' : 'n'} compra o venta de dólares y figura{fxPending.length === 1 ? '' : 'n'} como gasto o ingreso.</>, target: 'fx', action: 'Corregir' });
+    }
+    const pairable = p.readOnly ? [] : suggestTransferPairs(p.transactions);
+    if (pairable.length > 0) {
+      out.push({ key: 'pairs', level: 'mid', icon: '🔗', text: <><strong>{pairable.length}</strong> transferencia{pairable.length === 1 ? '' : 's'} se puede{pairable.length === 1 ? '' : 'n'} emparejar sola{pairable.length === 1 ? '' : 's'}: la plata sale de una cuenta tuya y entra en otra.</>, target: 'pairs', action: 'Emparejar' });
     }
     if (!p.readOnly && d.unassignedTransfers > 0) {
       out.push({ key: 'unassigned', level: 'low', icon: '🔀', text: <><strong>{d.unassignedTransfers}</strong> transferencia{d.unassignedTransfers === 1 ? '' : 's'} sin asignar a qué cuenta fue o vino.</>, target: 'history', action: 'Asignar' });

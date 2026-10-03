@@ -19,7 +19,9 @@ import PlanningHub, { type Tab as PlanningTab } from '@/components/planning/Plan
 import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip';
 import CategorySelect, { saveUserCategory } from '@/components/CategorySelect';
 import { isOlderStatement, reconcileTotal, statementCloseDate } from '@/lib/statement';
-import { buildCategories } from '@/lib/categories';
+import { buildCategories, categoryLabel } from '@/lib/categories';
+import { suggestRuleKeyword, ruleCovers } from '@/lib/rules';
+import { accountKey, suggestTransferPairs } from '@/lib/transfers';
 import { LEGAL } from '@/lib/legal';
 import { needsOwnTransferFix, FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
@@ -868,9 +870,12 @@ export default function FinanzasDRMIA() {
       .eq('user_id', user.id);
 
     if (!error) {
+      const changedCategory = editTxType === 'expense' && editTxOpType === 'purchase' && editTxCategory !== editingTransaction.category;
+      const txForRule = { ...editingTransaction, description: editTxDescription };
       setEditingTransaction(null);
       await refreshAll(user.id);
       alert('¡Transacción modificada con éxito!');
+      if (changedCategory) void offerCategoryRule(txForRule, editTxCategory);
     } else {
       alert('Error al modificar: ' + error.message);
     }
@@ -905,6 +910,7 @@ export default function FinanzasDRMIA() {
   function goToAlert(t: AlertTarget) {
     if (t === 'fx') { void fixFxTransactions(); return; }
     if (t === 'owntransfer') { void fixOwnTransfers(); return; }
+    if (t === 'pairs') { void applyTransferPairs(); return; }
     const tabs: Partial<Record<AlertTarget, PlanningTab>> = { budgets: 'presupuestos', dues: 'vencimientos', goals: 'metas' };
     const tab = tabs[t];
     if (tab) { setPlanningTab(tab); setSection('planificacion'); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -1083,12 +1089,13 @@ export default function FinanzasDRMIA() {
       if (importFile) {
         const formData = new FormData();
         formData.append('file', importFile);
+        formData.append('categories', JSON.stringify(allCategories));
         res = await authFetch('/api/parse-statement', { method: 'POST', body: formData });
       } else {
         res = await authFetch('/api/parse-statement', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ raw_text: importText }),
+          body: JSON.stringify({ raw_text: importText, categories: allCategories }),
         });
       }
 
@@ -1295,6 +1302,25 @@ export default function FinanzasDRMIA() {
       .in('id', list.map(t => t.id)).eq('user_id', user.id);
     if (error) { alert('No se pudo corregir: ' + error.message); return; }
     refreshAll(user.id);
+  }
+
+  // Empareja solas las transferencias que salen de una cuenta y entran en otra (mismo importe, fechas cercanas).
+  async function applyTransferPairs() {
+    if (!user) return;
+    const pairs = suggestTransferPairs(transactions);
+    if (pairs.length === 0) { alert('No encontré transferencias para emparejar.'); return; }
+    const name = (key: string) => accountName(key) || key;
+    const sample = pairs.slice(0, 4).map(pr =>
+      `• ${formatMoney(Number(pr.out.amount), pr.out.currency === 'USD' ? 'USD' : 'ARS')}: ${name(accountKey(pr.out))} → ${name(accountKey(pr.in))}`).join('\n');
+    if (!confirm(`Encontré ${pairs.length} transferencia${pairs.length === 1 ? '' : 's'} que salen de una cuenta y entran en otra (mismo importe y fechas cercanas):\n\n${sample}${pairs.length > 4 ? '\n…' : ''}\n\n¿Las asigno?`)) return;
+    let failed = 0;
+    for (const pr of pairs) {
+      const a = await supabase.from('transactions').update({ transfer_account: accountKey(pr.in) }).eq('id', pr.out.id).eq('user_id', user.id);
+      const b = await supabase.from('transactions').update({ transfer_account: accountKey(pr.out) }).eq('id', pr.in.id).eq('user_id', user.id);
+      if (a.error || b.error) failed++;
+    }
+    if (failed > 0) alert(`${failed} par(es) no se pudieron guardar (¿corriste la migración 006?).`);
+    await refreshAll(user.id);
   }
 
   // Retiros de efectivo y similares guardados como gasto: pasan a transferencia propia (no cuentan).
@@ -1700,6 +1726,34 @@ export default function FinanzasDRMIA() {
     const { error } = await supabase.from('transactions').update({ category: newCategory }).eq('id', txId).eq('user_id', user.id);
     if (error) { alert('No se pudo cambiar el rubro: ' + error.message); return; }
     setTransactions(prev => prev.map(t => (t.id === txId ? { ...t, category: newCategory } : t)));
+    const tx = transactions.find(t => t.id === txId);
+    if (tx) void offerCategoryRule(tx, newCategory);
+  }
+
+  // Después de cambiar un rubro a mano, ofrece recordarlo para esa persona o comercio (y corregir los parecidos).
+  const askedRuleKeys = useRef<Set<string>>(new Set());
+  async function offerCategoryRule(tx: any, newCategory: string) {
+    if (!user || viewingOwner || tx.type !== 'expense' || newCategory === 'Por Clasificar') return;
+    const kw = suggestRuleKeyword(tx.description);
+    if (!kw || askedRuleKeys.current.has(kw) || ruleCovers(categoryRules, kw)) return;
+    askedRuleKeys.current.add(kw); // no preguntar dos veces por lo mismo en esta sesión
+    const fold = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const similar = transactions.filter(t =>
+      t.id !== tx.id && t.type === 'expense' && (t.operation_type || 'purchase') === 'purchase' &&
+      fold(t.description).includes(kw) && (t.category || 'Otros') !== newCategory);
+    const msg = `¿Querés que "${kw}" quede siempre en "${categoryLabel(newCategory)}"?\n\n` +
+      (similar.length > 0
+        ? `Se aplica también a ${similar.length} movimiento${similar.length === 1 ? '' : 's'} parecido${similar.length === 1 ? '' : 's'} que hoy ${similar.length === 1 ? 'está' : 'están'} en otro rubro, y a los próximos que importes.`
+        : 'Se aplica a los próximos que importes.');
+    if (!confirm(msg)) return;
+    const { error } = await supabase.from('category_rules').upsert([{ user_id: user.id, keyword: kw, category: newCategory }], { onConflict: 'user_id,keyword' });
+    if (error) { alert('No se pudo guardar la regla (¿corriste la migración 008?): ' + error.message); return; }
+    setCategoryRules(prev => [...prev.filter(r => r.keyword !== kw), { keyword: kw, category: newCategory }]);
+    if (similar.length > 0) {
+      const { error: e2 } = await supabase.from('transactions').update({ category: newCategory }).in('id', similar.map(t => t.id)).eq('user_id', user.id);
+      if (e2) alert('La regla quedó guardada, pero no se pudieron actualizar los anteriores: ' + e2.message);
+      await refreshAll(user.id);
+    }
   }
 
   const transactionsOfSelectedCategory = useMemo(() => {

@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "outDir": "../.test-build",
+    "rootDir": "..",
+    "types": ["node"]
+  },
+  "include": ["./*.test.ts", "../lib/fx.ts", "../lib/planning.ts", "../lib/categories.ts", "../lib/statement.ts", "../lib/transfers.ts", "../lib/rules.ts"]
+}

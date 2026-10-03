@@ -6,9 +6,10 @@ export const metadata: Metadata = {
   description: 'Controlá tus finanzas, tarjetas y deudas con Inteligencia Artificial - DRM-IA',
   manifest: '/manifest.json',
   icons: {
-    icon: '/icon.svg',
-    apple: '/icon.svg',
+    icon: [{ url: '/icon.svg', type: 'image/svg+xml' }, { url: '/icon-192.png', sizes: '192x192', type: 'image/png' }],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
+  appleWebApp: { capable: true, title: 'DRM-IA Finanzas', statusBarStyle: 'black-translucent' },
 };
 
 export const viewport: Viewport = {

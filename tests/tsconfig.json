@@ -10,5 +10,5 @@
     "rootDir": "..",
     "types": ["node"]
   },
-  "include": ["./*.test.ts", "../lib/fx.ts", "../lib/planning.ts", "../lib/categories.ts", "../lib/statement.ts", "../lib/transfers.ts", "../lib/rules.ts"]
+  "include": ["./*.test.ts", "../lib/fx.ts", "../lib/planning.ts", "../lib/categories.ts", "../lib/statement.ts", "../lib/transfers.ts", "../lib/rules.ts", "../lib/history.ts", "../lib/access.ts"]
 }

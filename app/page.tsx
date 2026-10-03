@@ -23,6 +23,7 @@ import { buildCategories, categoryLabel } from '@/lib/categories';
 import { suggestRuleKeyword, ruleCovers } from '@/lib/rules';
 import { accountKey, suggestTransferPairs } from '@/lib/transfers';
 import { LEGAL } from '@/lib/legal';
+import { EMPTY_FILTER, filterHistory, isFilterActive, toCsv, type HistoryFilter } from '@/lib/history';
 import { needsOwnTransferFix, FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
 import { applyRules, cleanDesc, computeNetWorth, findDuplicateGroups, findSimilarExisting } from '@/lib/planning';
@@ -245,6 +246,11 @@ export default function FinanzasDRMIA() {
   const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
   const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>(EMPTY_FILTER);
+  const [historyLimit, setHistoryLimit] = useState(50);
+  const [welcomeHidden, setWelcomeHidden] = useState(() => {
+    try { return localStorage.getItem('drm-welcome-hidden') === '1'; } catch { return false; }
+  });
   const [adminTab, setAdminTab] = useState<'review' | 'users'>('review');
   const [adminBusy, setAdminBusy] = useState(false);
 
@@ -1616,6 +1622,23 @@ export default function FinanzasDRMIA() {
     });
   }, [transactions, selectedMonth, profileType]);
 
+  const historyList = useMemo(
+    () => filterHistory(filteredTransactions, historyFilter, (t: any) => withProfile(t.description, false)),
+    [filteredTransactions, historyFilter]
+  );
+  useEffect(() => { setHistoryLimit(50); }, [historyFilter, selectedMonth, profileType]);
+
+  function exportHistoryCsv() {
+    const csv = toCsv(historyList, (t: any) => accountName(accountKeyOf(t)), (t: any) => withProfile(t.description, false));
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `movimientos-${selectedMonth === 'all' ? 'todos' : selectedMonth}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // Convierte un monto a la moneda elegida en el header (cotización editable).
   const toMode = useCallback((amountVal: number, cur?: string): number => {
     const c: Cur = cur === 'USD' ? 'USD' : 'ARS';
@@ -2353,6 +2376,37 @@ export default function FinanzasDRMIA() {
           )
         ) : (
         <div className={viewingOwner ? 'pointer-events-none select-text space-y-6' : 'space-y-6'}>
+        {user && !viewingOwner && !welcomeHidden && transactions.length === 0 && (
+          <div className="bg-gradient-to-br from-[#0B192C] to-[#132238] text-white rounded-2xl p-5 space-y-4 border border-slate-800" data-testid="welcome-card">
+            <div className="flex justify-between items-start gap-3">
+              <div>
+                <h2 className="text-base font-bold">¡Bienvenido a DRM-IA Finanzas! 👋</h2>
+                <p className="text-xs text-slate-300 mt-1">En 3 pasos tenés tu panorama completo. Tu prueba de {TRIAL_DAYS} días incluye todo.</p>
+              </div>
+              <button
+                onClick={() => { setWelcomeHidden(true); try { localStorage.setItem('drm-welcome-hidden', '1'); } catch {} }}
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
+                title="Ocultar"
+              >✕</button>
+            </div>
+            <ol className="grid sm:grid-cols-3 gap-3 text-xs">
+              <li className="bg-white/5 rounded-xl p-3 space-y-2">
+                <p className="font-bold text-[#00D7FF]">1 · Traé tus datos</p>
+                <p className="text-slate-300">Subí el resumen de tu tarjeta o el extracto de tu cuenta (PDF o foto). La IA lo lee y clasifica por rubro.</p>
+                <button onClick={() => { setTargetEntityForImport(null); setIsImportModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 font-bold px-3 py-1.5 rounded-lg cursor-pointer">Importar con IA</button>
+              </li>
+              <li className="bg-white/5 rounded-xl p-3 space-y-2">
+                <p className="font-bold text-[#00D7FF]">2 · O cargá un gasto</p>
+                <p className="text-slate-300">Anotá lo último que gastaste. También podés cargar tus tarjetas, billeteras y deudas desde cada sección.</p>
+                <button onClick={() => goToAlert('add')} className="bg-white/10 hover:bg-white/20 font-bold px-3 py-1.5 rounded-lg cursor-pointer">Cargar un gasto</button>
+              </li>
+              <li className="bg-white/5 rounded-xl p-3 space-y-2">
+                <p className="font-bold text-[#00D7FF]">3 · Instalala en el celular</p>
+                <p className="text-slate-300">Android (Chrome): menú ⋮ → «Instalar app». iPhone (Safari): Compartir → «Agregar a pantalla de inicio».</p>
+              </li>
+            </ol>
+          </div>
+        )}
         {isSuperUser && !viewingOwner && adminReceipts.some(r => r.admin_status === 'pending') && (
           <div className="bg-purple-50 border border-purple-200 text-purple-900 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
             <span>
@@ -2963,7 +3017,7 @@ export default function FinanzasDRMIA() {
         {/* Historial General */}
         <div id="seccion-historial" className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm scroll-mt-4">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-sm font-bold text-slate-900">Historial de Movimientos ({filteredTransactions.length} registros)</h3>
+            <h3 className="text-sm font-bold text-slate-900">Historial de Movimientos ({isFilterActive(historyFilter) ? `${historyList.length} de ${filteredTransactions.length}` : filteredTransactions.length} registros)</h3>
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={() => setIsDupModalOpen(true)}
@@ -2977,11 +3031,53 @@ export default function FinanzasDRMIA() {
               >
                 <Download className="w-3.5 h-3.5" /> Exportar Informe
               </button>
+              <button
+                onClick={exportHistoryCsv}
+                disabled={historyList.length === 0}
+                title="Descarga lo que ves filtrado, para abrir en Excel"
+                className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold px-3 py-1.5 rounded-xl border border-emerald-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5" /> Excel (CSV)
+              </button>
             </div>
           </div>
 
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4 text-xs" data-testid="history-filters">
+            <input
+              type="search"
+              value={historyFilter.query}
+              onChange={e => setHistoryFilter(f => ({ ...f, query: e.target.value }))}
+              placeholder="Buscar: comercio, rubro, monto…"
+              className="col-span-2 sm:col-span-4 border border-slate-200 rounded-xl px-3 py-2 bg-white text-slate-800"
+            />
+            <select value={historyFilter.kind} onChange={e => setHistoryFilter(f => ({ ...f, kind: e.target.value as HistoryFilter['kind'] }))} className="border border-slate-200 rounded-xl px-2 py-2 bg-white text-slate-700">
+              <option value="all">Todos los tipos</option>
+              <option value="expense">Gastos</option>
+              <option value="income">Ingresos</option>
+              <option value="transfer">Transferencias / pagos</option>
+              <option value="refund">Reintegros</option>
+            </select>
+            <select value={historyFilter.category} onChange={e => setHistoryFilter(f => ({ ...f, category: e.target.value }))} className="border border-slate-200 rounded-xl px-2 py-2 bg-white text-slate-700">
+              <option value="">Todos los rubros</option>
+              {allCategories.map((c: string) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={historyFilter.account} onChange={e => setHistoryFilter(f => ({ ...f, account: e.target.value }))} className="col-span-2 border border-slate-200 rounded-xl px-2 py-2 bg-white text-slate-700">
+              <option value="">Todas las cuentas</option>
+              {creditCards.map(c => <option key={c.id} value={`card:${c.id}`}>Tarjeta: {c.name}</option>)}
+              {loans.map(l => <option key={l.id} value={`loan:${l.id}`}>{l.entity}</option>)}
+              <option value="none">Sin cuenta asignada</option>
+            </select>
+            {isFilterActive(historyFilter) && (
+              <button onClick={() => setHistoryFilter(EMPTY_FILTER)} className="col-span-2 sm:col-span-4 text-[11px] font-bold text-indigo-700 text-left cursor-pointer">✕ Limpiar filtros</button>
+            )}
+          </div>
+
+          {historyList.length === 0 && (
+            <p className="text-xs text-slate-400 text-center py-6">{isFilterActive(historyFilter) ? 'Ningún movimiento coincide con los filtros.' : 'Todavía no hay movimientos en este período.'}</p>
+          )}
+
           <div className="space-y-2">
-            {filteredTransactions.map(t => {
+            {historyList.slice(0, historyLimit).map(t => {
               const isPayment = t.operation_type === 'payment';
               const isRefund = t.operation_type === 'refund';
               const isUsd = t.currency === 'USD';
@@ -3009,6 +3105,7 @@ export default function FinanzasDRMIA() {
                       </div>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-[10px] text-slate-400">
                         <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
+                        {accountName(accountKeyOf(t)) && <span className="bg-sky-50 text-sky-700 px-2 py-0.5 rounded font-semibold">🏦 {accountName(accountKeyOf(t))}</span>}
                         {t.type === 'expense' && t.operation_type !== 'transfer' && t.operation_type !== 'payment' ? (
                           <CategorySelect
                             value={t.category || 'Otros'}
@@ -3066,6 +3163,11 @@ export default function FinanzasDRMIA() {
               );
             })}
           </div>
+          {historyList.length > historyLimit && (
+            <button onClick={() => setHistoryLimit(n => n + 50)} className="w-full mt-3 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl py-2 cursor-pointer">
+              Mostrar más ({historyList.length - historyLimit} restantes)
+            </button>
+          )}
         </div>
         </div>
         )}

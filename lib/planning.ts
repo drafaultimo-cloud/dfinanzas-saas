@@ -364,3 +364,88 @@ export function netWorthSnapshotRow(userId: string, cards: Tx[], loans: Tx[], us
   const nw = computeNetWorth(cards, loans, usdRate);
   return { user_id: userId, month: currentMonthOf(today), assets_ars: nw.assets, liabilities_ars: nw.liabilities, usd_rate: usdRate, updated_at: new Date().toISOString() };
 }
+
+// ---------- Duplicados ----------
+const PAYEE_STOP = new Set([
+  'transferencia', 'transfer', 'enviada', 'recibida', 'envio', 'pago', 'pagos', 'debito', 'credito', 'compra', 'compras',
+  'cuit', 'cuil', 'tarjeta', 'cuenta', 'banco', 'mercado', 'servicio', 'servicios', 'varios', 'operacion', 'operaciones',
+  'identificadas', 'con', 'para', 'del', 'los', 'las', 'por', 'valor', 'actualizado', 'indice', 'alquiler', 'deposito', 'garantia',
+  'actualizacion', 'pesos', 'dolares', 'sucursal', 'interbanking', 'inmediata', 'inmediato', 'debin', 'cvu', 'cbu',
+]);
+/** Palabras que identifican a quién se le pagó (nombres, comercios); ignora las genéricas de los bancos y los números. */
+export function payeeTokens(desc: string): string[] {
+  return plain(cleanDesc(desc)).split(/[^a-z]+/).filter(t => t.length >= 4 && !PAYEE_STOP.has(t));
+}
+const dayDiff = (a: string, b: string) =>
+  Math.abs(Math.round((new Date(`${a}T00:00:00`).getTime() - new Date(`${b}T00:00:00`).getTime()) / 86400000));
+
+export interface SimilarMatch { tx: Tx; strength: 'strong' | 'weak'; }
+/**
+ * Busca un movimiento ya guardado que sea el mismo hecho aunque el banco lo describa distinto
+ * (ej: "Alquiler - transferencia a Desmonts Hugo" vs "Transferencia enviada Desmonts Hugo").
+ * strong: mismo importe, misma moneda, mismo sentido, fecha a ≤2 días y comparten nombre del destinatario.
+ * weak: mismo importe y mismo día pero sin nombre en común (solo se avisa, no se descarta).
+ * `used` evita que un movimiento guardado "absorba" dos del extracto.
+ */
+export function findSimilarExisting(
+  item: { date: string; amount: number; currency?: string; description: string; inflow: boolean },
+  txs: Tx[],
+  used: Set<string>
+): SimilarMatch | null {
+  const amt = Math.abs(Number(item.amount));
+  const cur = item.currency || 'ARS';
+  const want = payeeTokens(item.description);
+  let weak: Tx | null = null;
+  let best: { tx: Tx; d: number } | null = null;
+  for (const t of txs) {
+    if (used.has(t.id) || !t.date) continue;
+    if ((t.currency || 'ARS') !== cur) continue;
+    if (Math.abs(Math.abs(Number(t.amount)) - amt) > 0.01) continue;
+    if ((t.type === 'income') !== item.inflow) continue;
+    const d = dayDiff(t.date, item.date);
+    if (d > 2) continue;
+    const shared = payeeTokens(t.description).some(x => want.includes(x));
+    if (shared) { if (!best || d < best.d) best = { tx: t, d }; }
+    else if (d === 0 && amt >= 10000 && !weak) weak = t;
+  }
+  if (best) return { tx: best.tx, strength: 'strong' };
+  if (weak) return { tx: weak, strength: 'weak' };
+  return null;
+}
+
+export interface DuplicateGroup { key: string; strength: 'alta' | 'media'; items: Tx[]; }
+/** Grupos de movimientos ya guardados que parecen el mismo hecho cargado dos veces. */
+export function findDuplicateGroups(txs: Tx[]): DuplicateGroup[] {
+  const buckets = new Map<string, Tx[]>();
+  for (const t of txs) {
+    if (!t.date || !(Number(t.amount) > 0)) continue;
+    if (isTransferTx(t) && t.operation_type === 'payment') continue; // los pagos de tarjeta se comparan aparte
+    const k = `${Math.abs(Number(t.amount)).toFixed(2)}|${t.currency || 'ARS'}|${t.type}`;
+    buckets.set(k, [...(buckets.get(k) || []), t]);
+  }
+  const out: DuplicateGroup[] = [];
+  for (const [k, list] of buckets) {
+    if (list.length < 2) continue;
+    const sorted = [...list].sort((a, b) => a.date.localeCompare(b.date));
+    const used = new Set<string>();
+    for (let i = 0; i < sorted.length; i++) {
+      if (used.has(sorted[i].id)) continue;
+      const group = [sorted[i]];
+      for (let j = i + 1; j < sorted.length; j++) {
+        if (used.has(sorted[j].id)) continue;
+        if (dayDiff(sorted[i].date, sorted[j].date) > 2) continue;
+        group.push(sorted[j]);
+      }
+      if (group.length < 2) continue;
+      const tokenSets = group.map(g => payeeTokens(g.description));
+      const shared = tokenSets[0].some(tok => tokenSets.slice(1).some(ts => ts.includes(tok)));
+      const sameDesc = new Set(group.map(g => plain(cleanDesc(g.description)).slice(0, 14))).size === 1;
+      const amountBig = Math.abs(Number(group[0].amount)) >= 10000;
+      // El mismo texto exacto el mismo día suele ser una compra repetida legítima (dos cafés): solo se avisa si el importe es alto.
+      if (!amountBig && (!shared || sameDesc)) continue;
+      group.forEach(g => used.add(g.id));
+      out.push({ key: `${k}|${sorted[i].date}|${sorted[i].id}`, strength: shared ? 'alta' : 'media', items: group });
+    }
+  }
+  return out.sort((a, b) => (a.strength === b.strength ? Math.abs(Number(b.items[0].amount)) - Math.abs(Number(a.items[0].amount)) : a.strength === 'alta' ? -1 : 1));
+}

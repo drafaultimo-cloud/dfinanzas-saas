@@ -10,6 +10,7 @@ import {
   PLAN_PRO_PROMO,
   PLAN_PRO_REGULAR,
   TRIAL_DAYS,
+  APP_VERSION,
   todayLocal,
 } from '@/lib/config';
 import { AccessState, computeAccess, isAdminEmail } from '@/lib/access';
@@ -17,7 +18,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import PlanningHub from '@/components/planning/PlanningHub';
 import AlertsStrip from '@/components/planning/AlertsStrip';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
-import { applyRules, computeNetWorth } from '@/lib/planning';
+import { applyRules, cleanDesc, computeNetWorth, findDuplicateGroups, findSimilarExisting } from '@/lib/planning';
 import { 
   Sparkles, 
   CreditCard, 
@@ -173,6 +174,9 @@ export default function FinanzasDRMIA() {
   const viewingRef = useRef<{ id: string; email: string } | null>(null);
   const [categoryRules, setCategoryRules] = useState<any[]>([]);
   const planningJobsDone = useRef<string | null>(null);
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [expenseSort, setExpenseSort] = useState<'date' | 'amount'>('amount');
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
   const lastSnapshot = useRef<string>('');
 
   // Datos financieros
@@ -983,7 +987,7 @@ export default function FinanzasDRMIA() {
         const keyOf = (date: string, amount: number, cur: string, desc: string, op?: string) =>
           `${date}|${amount.toFixed(2)}|${cur}|${op === 'refund' || op === 'payment' ? `__${op}` : normDesc(desc)}`;
 
-        const existing = new Map<string, number>();
+        const existing = new Map<string, string[]>();
         transactions
           .filter(tx => {
             // Se comparan los de esa tarjeta/billetera y los que quedaron sin asignar (importes viejos).
@@ -994,22 +998,43 @@ export default function FinanzasDRMIA() {
           })
           .forEach(tx => {
             const k = keyOf(tx.date || '', Math.abs(Number(tx.amount)), tx.currency || 'ARS', tx.description || '', tx.operation_type);
-            existing.set(k, (existing.get(k) || 0) + 1);
+            existing.set(k, [...(existing.get(k) || []), tx.id]);
           });
 
+        // Cada movimiento guardado se puede "gastar" una sola vez, ya sea por coincidencia exacta o por parecido.
+        const usedIds = new Set<string>();
         data.items = data.items.map((item: any) => {
           const cleanAmount = Math.abs(Number(item.amount) || 0);
           const itemDate = item.date || todayLocal();
+          const op = item.operation_type || 'purchase';
           const k = keyOf(itemDate, cleanAmount, item.currency || 'ARS', item.description || '', item.operation_type);
-          const left = existing.get(k) || 0;
-          const isDuplicate = left > 0;
-          if (isDuplicate) existing.set(k, left - 1);
+          const ids = existing.get(k) || [];
+          let isDuplicate = ids.length > 0;
+          let dupReason = '';
+          let possibleDuplicate = false;
+          if (isDuplicate) {
+            usedIds.add(ids.shift() as string);
+          } else if (op === 'purchase' || op === 'income' || op === 'transfer') {
+            // El mismo hecho puede estar cargado con otra descripción (ej: "Alquiler - transferencia a X" vs "Transferencia enviada X").
+            const sim = findSimilarExisting(
+              { date: itemDate, amount: cleanAmount, currency: item.currency, description: item.description || '', inflow: isInflow(item) },
+              transactions, usedIds
+            );
+            if (sim) {
+              usedIds.add(sim.tx.id);
+              const label = `${cleanDesc(sim.tx.description).slice(0, 70)} (${sim.tx.date})`;
+              if (sim.strength === 'strong') { isDuplicate = true; dupReason = 'Ya cargado como: ' + label; }
+              else { possibleDuplicate = true; dupReason = 'Parecido a: ' + label; }
+            }
+          }
 
           return {
             ...item,
             date: itemDate,
             amount: cleanAmount,
             isDuplicate,
+            possibleDuplicate,
+            dupReason,
             direction: item.operation_type === 'payment' && (data.entity_kind === 'wallet' || targetEntityForImport?.type === 'loan') ? 'out' : item.direction,
             selectedCategory: (item.operation_type === 'purchase' && applyRules(item.description || '', categoryRules)) || item.category || (item.operation_type === 'refund' ? 'Otros' : 'Por Clasificar')
           };
@@ -1043,6 +1068,14 @@ export default function FinanzasDRMIA() {
     const guess = guessEntity(migrationData.entity_name, kind, creditCards, loans);
     setImportLink(guess || (!migrationData.entity_name ? 'none' : isWallet ? 'new-loan' : 'new-card'));
     setMigrationData({ ...migrationData, entity_kind: kind, items });
+  }
+
+  // El usuario decide si un movimiento ya estaba cargado (se omite) o si hay que importarlo igual.
+  function handleToggleDuplicate(index: number) {
+    if (!migrationData?.items) return;
+    const updated = [...migrationData.items];
+    updated[index] = { ...updated[index], isDuplicate: !updated[index].isDuplicate, possibleDuplicate: false };
+    setMigrationData({ ...migrationData, items: updated });
   }
 
   function handleChangePreviewCounterpart(index: number, key: string) {
@@ -2049,12 +2082,17 @@ export default function FinanzasDRMIA() {
             <ArrowUpCircle className="w-8 h-8 text-emerald-500 opacity-20 group-hover:opacity-80 transition-all" />
           </div>
 
-          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div
+            onClick={() => setIsExpenseModalOpen(true)}
+            title="Toca para ver todos los gastos del período"
+            className="bg-white p-5 rounded-2xl border border-rose-100 shadow-sm flex items-center justify-between cursor-pointer hover:border-rose-400 hover:shadow-md transition-all group"
+          >
             <div>
               <p className="text-xs text-slate-400">Gastos netos ({selectedMonth === 'all' ? 'histórico' : selectedMonth})</p>
               <h3 className="text-xl font-bold text-rose-600">{formatMoney(totalExpense, currencyMode)}</h3>
+              <p className="text-[10px] text-rose-600 font-semibold mt-0.5">Toca para ver desglose ➔</p>
             </div>
-            <ArrowDownCircle className="w-8 h-8 text-rose-500 opacity-20" />
+            <ArrowDownCircle className="w-8 h-8 text-rose-500 opacity-20 group-hover:opacity-80 transition-all" />
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
@@ -2558,12 +2596,20 @@ export default function FinanzasDRMIA() {
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-sm font-bold text-slate-900">Historial de Movimientos ({filteredTransactions.length} registros)</h3>
-            <button 
-              onClick={() => window.print()}
-              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-3 py-1.5 rounded-xl border border-slate-200 flex items-center gap-1.5 cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" /> Exportar Informe
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setIsDupModalOpen(true)}
+                className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold px-3 py-1.5 rounded-xl border border-amber-200 flex items-center gap-1.5 cursor-pointer"
+              >
+                <AlertTriangle className="w-3.5 h-3.5" /> Buscar duplicados
+              </button>
+              <button 
+                onClick={() => window.print()}
+                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-3 py-1.5 rounded-xl border border-slate-200 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" /> Exportar Informe
+              </button>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -2573,67 +2619,65 @@ export default function FinanzasDRMIA() {
               const isUsd = t.currency === 'USD';
 
               return (
-                <div key={t.id} className="flex justify-between items-center p-3 rounded-xl border border-slate-50 hover:bg-slate-50/50">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs font-semibold text-slate-800">{withProfile(t.description, false)}</p>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${profileType === 'business' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
-                        {profileType === 'business' ? 'Negocio' : 'Personal'}
-                      </span>
-                      {isRefund && (
-                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-1.5 py-0.2 rounded">
-                          Reintegro
+                <div key={t.id} className="p-3 rounded-xl border border-slate-100 hover:bg-slate-50/50 space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-slate-800 break-words">{withProfile(t.description, false)}</p>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${profileType === 'business' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                          {profileType === 'business' ? 'Negocio' : 'Personal'}
                         </span>
-                      )}
-                      {isPayment && (
-                        <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-1.5 py-0.2 rounded">
-                          Pago Tarjeta
-                        </span>
-                      )}
-                      {t.operation_type === 'transfer' && (
-                        <span className="bg-violet-100 text-violet-800 text-[10px] font-bold px-1.5 py-0.2 rounded">
-                          Transferencia propia
-                        </span>
-                      )}
-                      {(t.operation_type === 'transfer' || t.operation_type === 'payment') && (
-                        <select
-                          value={t.transfer_account || ''}
-                          onChange={e => setTransferAccount(t.id, e.target.value)}
-                          title="¿De dónde vino o a dónde fue?"
-                          className="border border-violet-200 rounded-lg px-1 py-0.5 bg-white text-[10px] text-slate-700 max-w-[170px]"
-                        >
-                          <option value="">{t.type === 'income' ? 'Viene de: sin asignar' : 'Va a: sin asignar'}</option>
-                          {counterpartOptions(accountKeyOf(t)).map(o => (
-                            <option key={o.key} value={o.key}>{t.type === 'income' ? 'Viene de: ' : 'Va a: '}{o.label}</option>
-                          ))}
-                        </select>
-                      )}
+                        {isRefund && (
+                          <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Reintegro</span>
+                        )}
+                        {isPayment && (
+                          <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Pago Tarjeta</span>
+                        )}
+                        {t.operation_type === 'transfer' && (
+                          <span className="bg-violet-100 text-violet-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Transferencia propia</span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-[10px] text-slate-400">
+                        <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
+                        <span>{t.category}</span>
+                        {isUsd && <span className="text-emerald-700 font-bold">u$s Dólares</span>}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
-                      <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
-                      <span>• {t.category}</span>
-                      {isUsd && <span className="text-emerald-700 font-bold">• u$s Dólares</span>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    <span className={`text-xs font-bold whitespace-nowrap shrink-0 ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
                       {t.type === 'income' ? '+' : '-'}{formatMoney(Number(t.amount), isUsd ? 'USD' : 'ARS')}
                     </span>
+                  </div>
+
+                  {(t.operation_type === 'transfer' || t.operation_type === 'payment') && (
+                    <select
+                      value={t.transfer_account || ''}
+                      onChange={e => setTransferAccount(t.id, e.target.value)}
+                      title="¿De dónde vino o a dónde fue?"
+                      className="w-full border border-violet-200 rounded-lg px-2 py-1.5 bg-white text-[11px] text-slate-700"
+                    >
+                      <option value="">{t.type === 'income' ? 'Viene de: sin asignar' : 'Va a: sin asignar'}</option>
+                      {counterpartOptions(accountKeyOf(t)).map(o => (
+                        <option key={o.key} value={o.key}>{t.type === 'income' ? 'Viene de: ' : 'Va a: '}{o.label}</option>
+                      ))}
+                    </select>
+                  )}
+
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <button
                       onClick={() => moveTransactionsToProfile([t.id], profileType === 'personal')}
                       title={profileType === 'personal' ? 'Pasar este movimiento a Negocio' : 'Pasar este movimiento a Personal'}
-                      className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 hover:bg-slate-100 whitespace-nowrap cursor-pointer"
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 hover:bg-slate-100 whitespace-nowrap cursor-pointer"
                     >
                       {profileType === 'personal' ? 'A Negocio' : 'A Personal'}
                     </button>
                     <button
                       onClick={() => openEditTransaction(t)}
                       title="Editar movimiento"
-                      className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                      className="shrink-0 p-1.5 text-slate-400 hover:text-blue-600 rounded-lg border border-slate-200 bg-white transition-colors cursor-pointer"
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={() => handleDelete(t.id)} className="text-slate-400 hover:text-red-500 cursor-pointer p-1">
+                    <button onClick={() => handleDelete(t.id)} title="Eliminar" className="shrink-0 p-1.5 text-slate-400 hover:text-red-500 rounded-lg border border-slate-200 bg-white cursor-pointer">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -2645,12 +2689,14 @@ export default function FinanzasDRMIA() {
         </div>
         )}
 
+        <p className="text-center text-[10px] text-slate-300 pt-2">DRM-IA Finanzas · versión {APP_VERSION}</p>
+
       </div>
 
       {/* MODAL: EDITAR TARJETA CON SALDOS EN ARS Y USD */}
       {isEditCardModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <h3 className="text-sm font-bold text-slate-900">Editar Tarjeta</h3>
               <button onClick={() => setIsEditCardModalOpen(false)}><X className="w-5 h-5" /></button>
@@ -2687,7 +2733,7 @@ export default function FinanzasDRMIA() {
       {/* MODAL: NUEVA TARJETA BIMONETARIA */}
       {isCardModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <h3 className="text-sm font-bold text-slate-900">Nueva Tarjeta de Crédito</h3>
               <button onClick={() => setIsCardModalOpen(false)}><X className="w-5 h-5" /></button>
@@ -2724,7 +2770,7 @@ export default function FinanzasDRMIA() {
       {/* MODAL: AGREGAR BILLETERA / EFECTIVO / PRÉSTAMO */}
       {isLoanModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <h3 className="text-sm font-bold text-slate-900">
                 {newLoanKind === 'loan' ? 'Nuevo Préstamo / Hipotecario' : newLoanKind === 'cash' ? 'Nuevo Efectivo' : 'Nueva Billetera o Cuenta'}
@@ -2796,7 +2842,7 @@ export default function FinanzasDRMIA() {
       {/* MODAL IMPORTADOR CON REVISIÓN DE COMPRAS, PAGOS Y REINTEGROS */}
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-3xl rounded-3xl p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
+          <div className="bg-white w-full max-w-3xl rounded-3xl p-4 sm:p-6 shadow-xl space-y-4 max-h-[90dvh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-indigo-600" />
@@ -2901,9 +2947,9 @@ export default function FinanzasDRMIA() {
                         key={idx} 
                         className={`p-3 rounded-xl border text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 ${isDup ? 'bg-slate-100 border-slate-200 opacity-60' : isRefund || isIncomeOp ? 'bg-emerald-50/60 border-emerald-200' : isPayment ? 'bg-blue-50/60 border-blue-200' : isOwnTransfer ? 'bg-violet-50/60 border-violet-200' : 'bg-white border-slate-200'}`}
                       >
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-slate-900">{item.description}</span>
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-slate-900 break-words min-w-0">{item.description}</span>
                             {isRefund && (
                               <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">
                                 Reintegro / Nota de Crédito
@@ -2933,12 +2979,28 @@ export default function FinanzasDRMIA() {
                           <p className="text-[10px] text-slate-400 font-mono">
                             Fecha: {item.date} {isUsd ? '• Moneda: Dólares (USD)' : '• Moneda: Pesos (ARS)'}
                           </p>
+                          {item.dupReason && (
+                            <p className={`text-[10px] font-semibold break-words ${item.possibleDuplicate ? 'text-amber-700' : 'text-slate-500'}`}>
+                              {item.possibleDuplicate ? '⚠ ¿Duplicado? ' : ''}{item.dupReason}
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
                           <span className={`font-bold ${isIn ? 'text-emerald-600' : 'text-slate-900'}`}>
                             {isIn ? '+' : '-'}{formatMoney(item.amount, isUsd ? 'USD' : 'ARS')}
                           </span>
+
+                          {(true) && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleDuplicate(idx)}
+                              className="text-[10px] font-bold px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 whitespace-nowrap cursor-pointer"
+                              title={isDup ? 'Importarlo igual' : 'Marcar como ya cargado (no se importa)'}
+                            >
+                              {isDup ? 'Importar igual' : 'Ya lo tengo'}
+                            </button>
+                          )}
 
                           {!isDup && (
                             <select
@@ -3030,7 +3092,7 @@ export default function FinanzasDRMIA() {
         const nBusiness = rows.filter(t => isBusinessDesc(t.description)).length;
         return (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-3 max-h-[88vh] flex flex-col border border-slate-100">
+            <div className="bg-white w-full max-w-2xl rounded-3xl p-4 sm:p-6 shadow-2xl space-y-3 max-h-[88vh] flex flex-col border border-slate-100">
               <div className="flex justify-between items-start border-b border-slate-100 pb-3">
                 <div>
                   <h3 className="text-base font-bold text-slate-900">Movimientos de {movementsEntity.name}</h3>
@@ -3160,10 +3222,157 @@ export default function FinanzasDRMIA() {
         );
       })()}
 
+      {/* MODAL: DESGLOSE DE GASTOS NETOS DEL PERÍODO */}
+      {isExpenseModalOpen && (() => {
+        const accName = (t: any) =>
+          t.credit_card_id ? (creditCards.find(c => c.id === t.credit_card_id)?.name || 'Tarjeta') :
+          t.loan_id ? (loans.find(l => l.id === t.loan_id)?.entity || 'Cuenta') : 'Sin cuenta asignada';
+        const sortFn = (a: any, b: any) =>
+          expenseSort === 'amount'
+            ? toMode(Number(b.amount), b.currency) - toMode(Number(a.amount), a.currency)
+            : String(b.date || '').localeCompare(String(a.date || ''));
+        const purchases = [...purchaseTransactions].sort(sortFn);
+        const refunds = filteredTransactions.filter(t => isRefund(t) && !isTransfer(t)).sort(sortFn);
+        const excluded = filteredTransactions.filter(t => isTransfer(t)).sort(sortFn);
+        const sumP = sumMode(purchases);
+        const sumR = sumMode(refunds);
+        const byAccount = new Map<string, number>();
+        purchases.forEach(t => byAccount.set(accName(t), (byAccount.get(accName(t)) || 0) + toMode(Number(t.amount), t.currency)));
+        const accounts = [...byAccount.entries()].sort((a, b) => b[1] - a[1]);
+        const row = (t: any, sign: '-' | '+', color: string) => (
+          <div key={t.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl flex justify-between items-start gap-3 text-xs">
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-slate-800 break-words">{withProfile(t.description, false)}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5 break-words">
+                <span className="font-mono">{t.date}</span> • {t.category || 'Sin rubro'} • {accName(t)}
+                {t.currency === 'USD' && <span className="text-emerald-700 font-bold"> • u$s</span>}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={`font-bold whitespace-nowrap ${color}`}>{sign}{formatMoney(Number(t.amount), t.currency || 'ARS')}</span>
+              <button onClick={() => openEditTransaction(t)} title="Editar o reclasificar" className="shrink-0 p-1.5 text-slate-400 hover:text-blue-600 rounded bg-white border border-slate-200 cursor-pointer">
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        );
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white w-full max-w-2xl rounded-3xl p-4 sm:p-6 shadow-2xl space-y-3 max-h-[88dvh] flex flex-col border border-slate-100">
+              <div className="flex justify-between items-start gap-3 border-b border-slate-100 pb-3">
+                <div className="flex items-start gap-2 min-w-0">
+                  <ArrowDownCircle className="w-6 h-6 text-rose-600 shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="text-base font-bold text-slate-900">Gastos netos ({selectedMonth === 'all' ? 'histórico' : selectedMonth})</h3>
+                    <p className="text-[11px] text-slate-500">
+                      {formatMoney(sumP, currencyMode)} de compras − {formatMoney(sumR, currencyMode)} de reintegros = <strong className="text-rose-600">{formatMoney(totalExpense, currencyMode)}</strong>
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setIsExpenseModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 shrink-0"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-slate-500">Ordenar por:</span>
+                <button onClick={() => setExpenseSort('amount')} className={`px-2.5 py-1 rounded-lg border font-bold cursor-pointer ${expenseSort === 'amount' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}>Mayor importe</button>
+                <button onClick={() => setExpenseSort('date')} className={`px-2.5 py-1 rounded-lg border font-bold cursor-pointer ${expenseSort === 'date' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}>Más reciente</button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                {accounts.length > 0 && (
+                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-1">
+                    <p className="text-[11px] font-bold text-slate-700">Por cuenta</p>
+                    {accounts.map(([name, val]) => (
+                      <div key={name} className="flex justify-between gap-3 text-[11px]">
+                        <span className="text-slate-600 break-words min-w-0">{name}</span>
+                        <span className="font-bold text-slate-800 whitespace-nowrap">{formatMoney(val, currencyMode)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-bold text-slate-700">Compras y gastos ({purchases.length})</p>
+                  {purchases.length === 0 ? <p className="text-xs text-slate-400 py-4 text-center">No hay gastos en este período.</p> : purchases.map(t => row(t, '-', 'text-rose-600'))}
+                </div>
+
+                {refunds.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-bold text-emerald-700">Reintegros que restan ({refunds.length})</p>
+                    {refunds.map(t => row(t, '+', 'text-emerald-600'))}
+                  </div>
+                )}
+
+                {excluded.length > 0 && (
+                  <details className="bg-violet-50/50 border border-violet-100 rounded-xl p-3">
+                    <summary className="text-[11px] font-bold text-violet-800 cursor-pointer">
+                      No cuentan como gasto: pagos de tarjeta y transferencias propias ({excluded.length}) · {formatMoney(sumMode(excluded), currencyMode)}
+                    </summary>
+                    <div className="space-y-2 mt-2">
+                      {excluded.map(t => row(t, t.type === 'income' ? '+' : '-', 'text-slate-500'))}
+                    </div>
+                  </details>
+                )}
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex justify-end">
+                <button onClick={() => setIsExpenseModalOpen(false)} className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-4 py-2 rounded-xl cursor-pointer">Cerrar</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL: BUSCAR DUPLICADOS YA CARGADOS */}
+      {isDupModalOpen && (() => {
+        const groups = findDuplicateGroups(transactions.filter(t => !isTransfer(t) || t.operation_type === 'transfer'));
+        const accName = (t: any) =>
+          t.credit_card_id ? (creditCards.find(c => c.id === t.credit_card_id)?.name || 'Tarjeta') :
+          t.loan_id ? (loans.find(l => l.id === t.loan_id)?.entity || 'Cuenta') : 'Sin cuenta';
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white w-full max-w-2xl rounded-3xl p-4 sm:p-6 shadow-2xl space-y-3 max-h-[88dvh] flex flex-col border border-slate-100">
+              <div className="flex justify-between items-start gap-3 border-b border-slate-100 pb-3">
+                <div className="min-w-0">
+                  <h3 className="text-base font-bold text-slate-900">Posibles duplicados</h3>
+                  <p className="text-[11px] text-slate-500">Mismo importe, misma moneda y fecha cercana (hasta 2 días), aunque la descripción sea distinta. Revisá cada grupo y borrá el que sobra.</p>
+                </div>
+                <button onClick={() => setIsDupModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 shrink-0"><X className="w-5 h-5" /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                {groups.length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-8">No encontré movimientos que parezcan duplicados.</p>
+                ) : groups.map(g => (
+                  <div key={g.key} className="border border-amber-200 bg-amber-50/40 rounded-xl p-3 space-y-2">
+                    <p className="text-[11px] font-bold text-amber-800">
+                      {g.strength === 'alta' ? 'Muy probable duplicado' : 'Podría ser un duplicado'} · {formatMoney(Number(g.items[0].amount), g.items[0].currency || 'ARS')}
+                    </p>
+                    {g.items.map(t => (
+                      <div key={t.id} className="bg-white border border-slate-100 rounded-lg p-2.5 flex items-start justify-between gap-3 text-xs">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-slate-800 break-words">{withProfile(t.description, false)}</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 break-words"><span className="font-mono">{t.date}</span> • {t.category || 'Sin rubro'} • {accName(t)}</p>
+                        </div>
+                        <button onClick={() => handleDelete(t.id)} className="shrink-0 px-2.5 py-1.5 rounded-lg border border-red-200 bg-white text-red-600 text-[10px] font-bold hover:bg-red-50 cursor-pointer flex items-center gap-1">
+                          <Trash2 className="w-3 h-3" /> Borrar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div className="pt-2 border-t border-slate-100 flex justify-end">
+                <button onClick={() => setIsDupModalOpen(false)} className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-4 py-2 rounded-xl cursor-pointer">Cerrar</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* MODAL: DESGLOSE DE INGRESOS */}
       {isIncomeModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col border border-slate-100">
+          <div className="bg-white w-full max-w-2xl rounded-3xl p-4 sm:p-6 shadow-2xl space-y-4 max-h-[85dvh] flex flex-col border border-slate-100">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <ArrowUpCircle className="w-6 h-6 text-emerald-600" />
@@ -3186,16 +3395,16 @@ export default function FinanzasDRMIA() {
                 <p className="text-xs text-slate-400 text-center py-8">No hay ingresos registrados en este mes seleccionado.</p>
               ) : (
                 incomeTransactions.map(t => (
-                  <div key={t.id} className="p-3 bg-emerald-50/40 border border-emerald-100 rounded-xl flex justify-between items-center text-xs">
-                    <div>
-                      <p className="font-semibold text-slate-900">{t.description}</p>
+                  <div key={t.id} className="p-3 bg-emerald-50/40 border border-emerald-100 rounded-xl flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 text-xs">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-900 break-words">{t.description}</p>
                       <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-500">
                         <span className="font-mono">📅 {t.date}</span>
                         <span>• Origen: <strong>{t.income_source || 'Sueldo/Fijo'}</strong></span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-bold text-emerald-600 text-sm">
+                    <div className="flex items-center gap-3 flex-wrap shrink-0">
+                      <span className="font-bold text-emerald-600 text-sm whitespace-nowrap">
                         +{formatMoney(Number(t.amount), t.currency || 'ARS')}
                       </span>
                       <button
@@ -3233,7 +3442,7 @@ export default function FinanzasDRMIA() {
       {/* MODAL: DESGLOSE DE GASTOS POR RUBRO */}
       {selectedCategoryDetail && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col border border-slate-100">
+          <div className="bg-white w-full max-w-xl rounded-3xl p-4 sm:p-6 shadow-2xl space-y-4 max-h-[85dvh] flex flex-col border border-slate-100">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <ListFilter className="w-5 h-5 text-blue-600" />
@@ -3256,19 +3465,19 @@ export default function FinanzasDRMIA() {
                 <p className="text-xs text-slate-400 text-center py-8">No se encontraron movimientos registrados en este rubro.</p>
               ) : (
                 transactionsOfSelectedCategory.map(t => (
-                  <div key={t.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl flex justify-between items-center text-xs">
-                    <div>
-                      <p className="font-semibold text-slate-800">{t.description}</p>
+                  <div key={t.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl flex justify-between items-center gap-3 text-xs">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-slate-800 break-words">{t.description}</p>
                       <p className="text-[10px] text-slate-400 font-mono mt-0.5">Fecha del movimiento: {t.date}</p>
                     </div>
-                    <div className="flex items-center gap-2.5">
-                      <span className="font-bold text-rose-600">
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <span className="font-bold text-rose-600 whitespace-nowrap">
                         -{formatMoney(Number(t.amount), t.currency || 'ARS')}
                       </span>
                       <button 
                         onClick={() => openEditTransaction(t)}
                         title="Modificar rubro o datos"
-                        className="p-1 text-slate-400 hover:text-blue-600 rounded bg-white border border-slate-200"
+                        className="shrink-0 p-1.5 text-slate-400 hover:text-blue-600 rounded bg-white border border-slate-200"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
@@ -3293,7 +3502,7 @@ export default function FinanzasDRMIA() {
       {/* MODAL: EDITAR RUBRO, ORIGEN O DATOS */}
       {editingTransaction && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-4 border border-slate-100">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-4 sm:p-6 shadow-2xl space-y-4 border border-slate-100">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <h3 className="text-sm font-bold text-slate-900">Modificar Transacción</h3>
               <button onClick={() => setEditingTransaction(null)} className="text-slate-400 hover:text-slate-600">
@@ -3399,7 +3608,7 @@ export default function FinanzasDRMIA() {
       {/* MODAL: CHAT INTERNO */}
       {isChatModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col border border-slate-800">
+          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90dvh] flex flex-col border border-slate-800">
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <MessageSquare className="w-5 h-5 text-[#00D7FF]" />
@@ -3459,7 +3668,7 @@ export default function FinanzasDRMIA() {
       {/* MODAL: DIAGNÓSTICO AUDITOR IA */}
       {isDiagnosisOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col border border-slate-800">
+          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90dvh] flex flex-col border border-slate-800">
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-[#00D7FF]" />
@@ -3485,7 +3694,7 @@ export default function FinanzasDRMIA() {
       {/* MODAL: SIMULADOR BOLA DE NIEVE */}
       {isSnowballModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col border border-slate-800">
+          <div className="bg-[#0B192C] text-slate-100 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90dvh] flex flex-col border border-slate-800">
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <Calculator className="w-5 h-5 text-[#00D7FF]" />
@@ -3516,7 +3725,7 @@ export default function FinanzasDRMIA() {
       {/* Panel Superusuario */}
       {isAdminPanelOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-4xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+          <div className="bg-white w-full max-w-4xl rounded-3xl p-4 sm:p-6 shadow-2xl space-y-4 max-h-[90dvh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos</h3>
               <button onClick={() => setIsAdminPanelOpen(false)}><X className="w-5 h-5" /></button>

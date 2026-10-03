@@ -39,3 +39,6 @@ export function todayLocal(d: Date = new Date()): string {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
+
+// Se muestra al pie de la app: sirve para comprobar qué versión está corriendo en el celular.
+export const APP_VERSION = '2026.10.03-d';

@@ -20,6 +20,7 @@ import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip
 import CategorySelect, { saveUserCategory } from '@/components/CategorySelect';
 import { isOlderStatement, reconcileTotal, statementCloseDate } from '@/lib/statement';
 import { buildCategories } from '@/lib/categories';
+import { LEGAL } from '@/lib/legal';
 import { needsOwnTransferFix, FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
 import { applyRules, cleanDesc, computeNetWorth, findDuplicateGroups, findSimilarExisting } from '@/lib/planning';
@@ -150,6 +151,9 @@ export default function FinanzasDRMIA() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [accountBusy, setAccountBusy] = useState(false);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
@@ -498,9 +502,11 @@ export default function FinanzasDRMIA() {
         // La carga de datos la dispara onAuthStateChange (SIGNED_IN).
         setViewMode('app');
       } else {
+        if (!acceptTerms) throw new Error('Para crear tu cuenta tenés que aceptar los Términos y la Política de Privacidad.');
         const { error } = await supabase.auth.signUp({
           email: authEmail,
           password: authPassword,
+          options: { data: { terms_accepted_at: new Date().toISOString(), terms_version: LEGAL.version } },
         });
         if (error) throw error;
         setAuthSuccess('¡Cuenta creada con éxito! Revisá tu correo si te pedimos confirmar y luego iniciá sesión: tenés 10 días gratis con acceso completo.');
@@ -510,6 +516,67 @@ export default function FinanzasDRMIA() {
       setAuthError(err.message || 'Error de autenticación');
     } finally {
       setAuthLoading(false);
+    }
+  }
+
+  // Descarga una copia de todos los datos del usuario (derecho de acceso).
+  async function exportMyData() {
+    if (!user) return;
+    setAccountBusy(true);
+    try {
+      const tables: [string, string][] = [
+        ['transactions', 'user_id'], ['credit_cards', 'user_id'], ['loans', 'user_id'], ['budgets', 'user_id'],
+        ['recurring_items', 'user_id'], ['savings_goals', 'user_id'], ['category_rules', 'user_id'],
+        ['net_worth_snapshots', 'user_id'], ['user_categories', 'user_id'],
+      ];
+      const out: Record<string, any> = { exportado_el: new Date().toISOString(), cuenta: { email: user.email, id: user.id } };
+      for (const [table, col] of tables) {
+        const rows: any[] = [];
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await supabase.from(table).select('*').eq(col, user.id).range(from, from + 999);
+          if (error) { if (from === 0) break; throw error; }
+          rows.push(...(data || []));
+          if (!data || data.length < 1000) break;
+        }
+        out[table] = rows;
+      }
+      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `drm-ia-finanzas-mis-datos-${todayLocal()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert('No se pudieron descargar tus datos: ' + (err?.message || 'error desconocido'));
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  // Elimina la cuenta y todos los datos (irreversible).
+  async function deleteMyAccount() {
+    if (!user || deleteConfirm.trim().toUpperCase() !== 'ELIMINAR') return;
+    setAccountBusy(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const res = await fetch('/api/account', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ confirm: deleteConfirm.trim() }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'No se pudo eliminar la cuenta.');
+      setDeleteConfirm('');
+      await supabase.auth.signOut();
+      alert('Tu cuenta y tus datos fueron eliminados. ¡Gracias por haber usado DRM-IA Finanzas!');
+    } catch (err: any) {
+      alert(err?.message || 'No se pudo eliminar la cuenta.');
+    } finally {
+      setAccountBusy(false);
     }
   }
 
@@ -1795,6 +1862,10 @@ export default function FinanzasDRMIA() {
 
         <footer className="border-t border-slate-800/80 py-8 text-center text-xs text-slate-500">
           © 2026 DRM-IA • Soluciones Integrales e Inteligencia Artificial • Río Gallegos
+          <div className="mt-2 flex justify-center gap-4">
+            <a href="/terminos" className="hover:text-slate-300 underline">Términos y Condiciones</a>
+            <a href="/privacidad" className="hover:text-slate-300 underline">Política de Privacidad</a>
+          </div>
         </footer>
       </div>
     );
@@ -1872,6 +1943,15 @@ export default function FinanzasDRMIA() {
                 required 
               />
             </div>
+
+            {authMode === 'register' && (
+              <label className="flex items-start gap-2 text-[11px] text-slate-400 leading-snug cursor-pointer">
+                <input type="checkbox" checked={acceptTerms} onChange={e => setAcceptTerms(e.target.checked)} className="mt-0.5 accent-[#00D7FF]" />
+                <span>
+                  Leí y acepto los <a href="/terminos" target="_blank" rel="noopener" className="text-[#00D7FF] underline">Términos y Condiciones</a> y la <a href="/privacidad" target="_blank" rel="noopener" className="text-[#00D7FF] underline">Política de Privacidad</a>, incluido el procesamiento de mis archivos con inteligencia artificial de terceros.
+                </span>
+              </label>
+            )}
 
             {authError && (
               <p className="text-xs text-rose-400 bg-rose-950/40 p-2.5 rounded-lg border border-rose-800">{authError}</p>
@@ -2888,6 +2968,34 @@ export default function FinanzasDRMIA() {
           </div>
         </div>
         </div>
+        )}
+
+        {!viewingOwner && (
+          <details className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-xs text-slate-600">
+            <summary className="cursor-pointer font-bold text-slate-800">Mi cuenta y privacidad</summary>
+            <div className="mt-3 space-y-4">
+              <div className="flex flex-wrap gap-3 text-[11px]">
+                <a href="/terminos" target="_blank" rel="noopener" className="text-blue-600 underline">Términos y Condiciones</a>
+                <a href="/privacidad" target="_blank" rel="noopener" className="text-blue-600 underline">Política de Privacidad</a>
+              </div>
+              <div>
+                <p className="mb-2">Descargá una copia de todos tus datos (movimientos, tarjetas, billeteras, presupuestos, etc.) en un archivo JSON.</p>
+                <button onClick={exportMyData} disabled={accountBusy} className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 font-bold text-slate-700 disabled:opacity-50 cursor-pointer">
+                  {accountBusy ? 'Preparando…' : 'Descargar mis datos'}
+                </button>
+              </div>
+              <div className="border-t border-slate-100 pt-3">
+                <p className="font-bold text-rose-700 mb-1">Eliminar mi cuenta</p>
+                <p className="mb-2">Se borran todos tus datos de forma definitiva y no se pueden recuperar. Te recomendamos descargar una copia antes. Para confirmar, escribí <strong>ELIMINAR</strong>.</p>
+                <div className="flex flex-wrap gap-2">
+                  <input value={deleteConfirm} onChange={e => setDeleteConfirm(e.target.value)} placeholder="ELIMINAR" className="border border-slate-200 rounded-xl px-3 py-2 w-36 outline-none" />
+                  <button onClick={deleteMyAccount} disabled={accountBusy || deleteConfirm.trim().toUpperCase() !== 'ELIMINAR'} className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold disabled:opacity-40 cursor-pointer">
+                    Eliminar mi cuenta y mis datos
+                  </button>
+                </div>
+              </div>
+            </div>
+          </details>
         )}
 
         <p className="text-center text-[10px] text-slate-300 pt-2">DRM-IA Finanzas · versión {APP_VERSION}</p>

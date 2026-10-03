@@ -19,8 +19,13 @@ order by tablename, policyname;
 select tablename, policyname, cmd, qual
 from pg_policies
 where schemaname = 'public'
-  and (qual is null or lower(replace(qual, ' ', '')) in ('true', '(true)'))
-  and tablename <> 'app_settings';   -- app_settings es de lectura pública a propósito
+  and tablename <> 'app_settings'
+  and (
+    -- lectura/edición/borrado sin condición, o condición "true"
+    (cmd <> 'INSERT' and (qual is null or lower(replace(qual, ' ', '')) in ('true', '(true)')))
+    -- alta sin condición (las políticas de INSERT usan with_check, no qual)
+    or (cmd = 'INSERT' and (with_check is null or lower(replace(with_check, ' ', '')) in ('true', '(true)')))
+  );   -- app_settings es de lectura pública a propósito
 
 -- 4) Funciones que otros roles pueden ejecutar (deben ser solo las esperadas).
 select p.proname as funcion, p.prosecdef as security_definer

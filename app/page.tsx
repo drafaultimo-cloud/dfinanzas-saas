@@ -67,6 +67,13 @@ const isTransfer = (t: any) => t.operation_type === 'payment';
 const isRefund = (t: any) => t.operation_type === 'refund';
 // balance_ars pasó a ser el saldo; credit_limit solo es respaldo de datos viejos (?? y no ||, así un saldo 0 no muestra el límite)
 const cardBalanceArs = (c: any) => Number(c.balance_ars ?? c.credit_limit ?? 0);
+// Un movimiento es del Negocio si su descripción empieza con "[NEGOCIO]".
+const BUSINESS_TAG = '[NEGOCIO]';
+const isBusinessDesc = (d?: string | null) => (d || '').startsWith(BUSINESS_TAG);
+const withProfile = (d: string | null | undefined, business: boolean) => {
+  const clean = (d || '').replace(/^\[NEGOCIO\]\s*/, '');
+  return business ? `${BUSINESS_TAG} ${clean}` : clean;
+};
 
 export default function FinanzasDRMIA() {
   const [viewMode, setViewMode] = useState<'landing' | 'app'>('landing');
@@ -108,6 +115,11 @@ export default function FinanzasDRMIA() {
 
   // Edición Rápida de Transacciones
   const [editingTransaction, setEditingTransaction] = useState<any>(null);
+  // Listado de movimientos de una tarjeta/billetera, para pasarlos de Personal a Negocio
+  const [movementsEntity, setMovementsEntity] = useState<{ kind: 'card' | 'loan'; id: string; name: string } | null>(null);
+  const [movMonth, setMovMonth] = useState('all');
+  const [movSelected, setMovSelected] = useState<string[]>([]);
+  const [movSaving, setMovSaving] = useState(false);
   const [editTxType, setEditTxType] = useState<'income' | 'expense'>('income');
   const [editTxOpType, setEditTxOpType] = useState<'purchase' | 'payment' | 'refund'>('purchase');
   const [editTxCurrency, setEditTxCurrency] = useState<'ARS' | 'USD'>('ARS');
@@ -548,6 +560,36 @@ export default function FinanzasDRMIA() {
     }
   }
 
+  // Pasa movimientos a Negocio (business=true) o de vuelta a Personal (business=false).
+  async function moveTransactionsToProfile(ids: string[], business: boolean) {
+    if (!user || ids.length === 0) return;
+    setMovSaving(true);
+    try {
+      const rows = transactions.filter(t => ids.includes(t.id));
+      const results = await Promise.all(
+        rows.map(t =>
+          supabase
+            .from('transactions')
+            .update({ description: withProfile(t.description, business) })
+            .eq('id', t.id)
+            .eq('user_id', user.id)
+        )
+      );
+      const failed = results.find(r => r.error);
+      if (failed?.error) alert('No se pudo cambiar algún movimiento: ' + failed.error.message);
+      setMovSelected([]);
+      await refreshAll(user.id);
+    } finally {
+      setMovSaving(false);
+    }
+  }
+
+  function openMovements(kind: 'card' | 'loan', id: string, name: string) {
+    setMovSelected([]);
+    setMovMonth(selectedMonth);
+    setMovementsEntity({ kind, id, name });
+  }
+
   function openEditTransaction(tx: any) {
     setEditingTransaction(tx);
     setEditTxType(tx.type);
@@ -895,7 +937,7 @@ export default function FinanzasDRMIA() {
   const filteredTransactions = useMemo(() => {
     return transactions.filter(t => {
       const matchMonth = selectedMonth === 'all' || (t.date && t.date.startsWith(selectedMonth));
-      const isBusinessTx = t.description?.startsWith('[NEGOCIO]');
+      const isBusinessTx = isBusinessDesc(t.description);
       const matchProfile = profileType === 'business' ? isBusinessTx : !isBusinessTx;
       return matchMonth && matchProfile;
     });
@@ -1671,6 +1713,13 @@ export default function FinanzasDRMIA() {
                       </div>
 
                       <button
+                        onClick={() => openMovements('card', c.id, c.name)}
+                        className="w-full mt-2 py-1.5 px-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        <ListFilter className="w-3 h-3" />
+                        Ver movimientos / pasar a Negocio
+                      </button>
+                      <button
                         onClick={() => openImportForEntity('card', c.id, c.name)}
                         className="w-full mt-2 py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
                       >
@@ -1736,6 +1785,13 @@ export default function FinanzasDRMIA() {
                         <p className="text-[10px] text-amber-600 font-semibold mt-0.5">Total: {formatMoney(Number(l.total_amount))}</p>
                       </div>
 
+                      <button
+                        onClick={() => openMovements('loan', l.id, l.entity)}
+                        className="w-full mt-2 py-1.5 px-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        <ListFilter className="w-3 h-3" />
+                        Ver movimientos / pasar a Negocio
+                      </button>
                       <button
                         onClick={() => openImportForEntity('loan', l.id, l.entity)}
                         className="w-full mt-2 py-1.5 px-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
@@ -2267,6 +2323,119 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
+      {/* MODAL: MOVIMIENTOS DE UNA TARJETA / BILLETERA (pasar a Negocio o a Personal) */}
+      {movementsEntity && (() => {
+        const rows = transactions
+          .filter(t =>
+            (movementsEntity.kind === 'card' ? t.credit_card_id : t.loan_id) === movementsEntity.id &&
+            (movMonth === 'all' || (t.date && t.date.startsWith(movMonth)))
+          )
+          .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+        const allSelected = rows.length > 0 && rows.every(t => movSelected.includes(t.id));
+        const nBusiness = rows.filter(t => isBusinessDesc(t.description)).length;
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-3 max-h-[88vh] flex flex-col border border-slate-100">
+              <div className="flex justify-between items-start border-b border-slate-100 pb-3">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Movimientos de {movementsEntity.name}</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {rows.length} movimientos • {nBusiness} de Negocio • {rows.length - nBusiness} Personales
+                  </p>
+                </div>
+                <button onClick={() => setMovementsEntity(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                <select
+                  value={movMonth}
+                  onChange={e => { setMovMonth(e.target.value); setMovSelected([]); }}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700"
+                >
+                  <option value="all">Todos los meses</option>
+                  {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <label className="flex items-center gap-1.5 text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={() => setMovSelected(allSelected ? [] : rows.map(t => t.id))}
+                  />
+                  Seleccionar todos
+                </label>
+                <div className="flex gap-2 ml-auto">
+                  <button
+                    disabled={movSelected.length === 0 || movSaving}
+                    onClick={() => moveTransactionsToProfile(movSelected, true)}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-bold disabled:opacity-40 cursor-pointer"
+                  >
+                    Pasar a Negocio ({movSelected.length})
+                  </button>
+                  <button
+                    disabled={movSelected.length === 0 || movSaving}
+                    onClick={() => moveTransactionsToProfile(movSelected, false)}
+                    className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 font-bold border border-slate-200 disabled:opacity-40 cursor-pointer"
+                  >
+                    Pasar a Personal
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                {rows.length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-8">No hay movimientos en este período.</p>
+                ) : rows.map(t => {
+                  const biz = isBusinessDesc(t.description);
+                  const isIn = t.type === 'income';
+                  const label = isTransfer(t) ? 'Pago de tarjeta' : isRefund(t) ? 'Reintegro' : null;
+                  return (
+                    <div key={t.id} className={`p-2.5 border rounded-xl flex items-center gap-2.5 text-xs ${biz ? 'bg-indigo-50/50 border-indigo-100' : 'bg-slate-50 border-slate-100'}`}>
+                      <input
+                        type="checkbox"
+                        checked={movSelected.includes(t.id)}
+                        onChange={() => setMovSelected(s => s.includes(t.id) ? s.filter(x => x !== t.id) : [...s, t.id])}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-900 truncate">{withProfile(t.description, false)}</p>
+                        <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-500">
+                          <span className="font-mono">{t.date}</span>
+                          {t.category && <span>• {t.category}</span>}
+                          {label && <span className="text-amber-600 font-semibold">• {label}</span>}
+                          <span className={`px-1.5 py-0.5 rounded font-bold ${biz ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                            {biz ? 'Negocio' : 'Personal'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className={`font-bold whitespace-nowrap ${isIn ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {isIn ? '+' : '-'}{formatMoney(Number(t.amount), t.currency || 'ARS')}
+                      </span>
+                      <button
+                        disabled={movSaving}
+                        onClick={() => moveTransactionsToProfile([t.id], !biz)}
+                        className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 hover:bg-slate-100 whitespace-nowrap cursor-pointer disabled:opacity-40"
+                      >
+                        {biz ? 'A Personal' : 'A Negocio'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex justify-end">
+                <button
+                  onClick={() => setMovementsEntity(null)}
+                  className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-4 py-2 rounded-xl cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* MODAL: DESGLOSE DE INGRESOS */}
       {isIncomeModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -2305,7 +2474,14 @@ export default function FinanzasDRMIA() {
                       <span className="font-bold text-emerald-600 text-sm">
                         +{formatMoney(Number(t.amount), t.currency || 'ARS')}
                       </span>
-                      <button 
+                      <button
+                        onClick={() => moveTransactionsToProfile([t.id], profileType === 'personal')}
+                        title={profileType === 'personal' ? 'Pasar este ingreso a Negocio' : 'Pasar este ingreso a Personal'}
+                        className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 hover:bg-slate-100 whitespace-nowrap"
+                      >
+                        {profileType === 'personal' ? 'A Negocio' : 'A Personal'}
+                      </button>
+                      <button
                         onClick={() => openEditTransaction(t)}
                         title="Editar transacción"
                         className="p-1 text-slate-400 hover:text-blue-600 rounded bg-white border border-slate-200"

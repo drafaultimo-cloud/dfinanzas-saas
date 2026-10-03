@@ -28,7 +28,7 @@ Fecha de hoy: ${today}. Extraé TODOS los movimientos, distinguiendo con precisi
    - "income": dinero que ENTRA como ingreso real: rendimientos o intereses ganados, transferencias recibidas de OTRAS personas, depósitos, cobros, sueldos.
    - "transfer": transferencia entre cuentas PROPIAS del titular (enviada o recibida) cuando el nombre de la contraparte coincide con el del titular del documento. No es ingreso ni gasto.
 2. currency: "USD" si figura en columna U$S/USS o indica dólares; "ARS" si son pesos.
-3. total_ars / total_usd: saldo total adeudado del resumen en pesos y en dólares (negativo si está a favor). null si no figura.
+3. total_ars / total_usd: en un resumen de TARJETA, el saldo total adeudado en pesos y en dólares (negativo si está a favor). En un extracto de CUENTA o BILLETERA, el dinero final disponible al cierre del período ("Dinero final", "Total disponible final"), en pesos y en dólares. null si no figura.
 4. category: una de ${STATEMENT_CATEGORIES.map(c => `"${c}"`).join(', ')}. Si no podés determinar el comercio, escribí EXACTAMENTE "Por Clasificar".
 5. amount siempre como número positivo con punto decimal (el signo lo da operation_type).
 6. date en formato YYYY-MM-DD; si falta el año, deducilo del período del resumen.

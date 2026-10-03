@@ -1038,6 +1038,18 @@ export default function FinanzasDRMIA() {
         }
       }
 
+      // Billetera / cuenta: se guarda el dinero disponible al cierre del extracto.
+      if (assignedLoanId) {
+        const upd: Record<string, number> = {};
+        if (migrationData.total_ars !== null && migrationData.total_ars !== undefined) upd.balance_ars = Number(migrationData.total_ars);
+        if (migrationData.total_usd !== null && migrationData.total_usd !== undefined) upd.balance_usd = Number(migrationData.total_usd);
+        if (Object.keys(upd).length > 0) {
+          const { error: balError } = await supabase
+            .from('loans').update(upd).eq('id', assignedLoanId).eq('user_id', currentSessionUser.id);
+          if (balError) balanceWarning = '\n\nAtención: los movimientos se guardaron pero no se pudo actualizar el saldo de la billetera (' + balError.message + ').';
+        }
+      }
+
       setIsImportModalOpen(false);
       setMigrationData(null);
       setImportText('');
@@ -1908,7 +1920,16 @@ export default function FinanzasDRMIA() {
                         {l.installment_amount > 0 && (
                           <p className="text-[10px] text-slate-500 mt-0.5">Cuota: {formatMoney(Number(l.installment_amount))}</p>
                         )}
-                        <p className="text-[10px] text-amber-600 font-semibold mt-0.5">Total: {formatMoney(Number(l.total_amount))}</p>
+                        {l.balance_ars !== null && l.balance_ars !== undefined ? (
+                          <div className="mt-0.5 space-y-0.5">
+                            <p className="text-[11px] font-bold text-emerald-700">Saldo en cuenta: {formatMoney(Number(l.balance_ars), 'ARS')}</p>
+                            {l.balance_usd !== null && l.balance_usd !== undefined && Number(l.balance_usd) !== 0 && (
+                              <p className="text-[11px] font-bold text-emerald-700">Saldo USD: {formatMoney(Number(l.balance_usd), 'USD')}</p>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-amber-600 font-semibold mt-0.5">Total: {formatMoney(Number(l.total_amount))}</p>
+                        )}
                       </div>
 
                       <button

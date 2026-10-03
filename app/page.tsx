@@ -846,8 +846,10 @@ export default function FinanzasDRMIA() {
         const existing = new Map<string, number>();
         transactions
           .filter(tx => {
-            if (targetEntityForImport?.type === 'card') return tx.credit_card_id === targetEntityForImport.id;
-            if (targetEntityForImport?.type === 'loan') return tx.loan_id === targetEntityForImport.id;
+            // Se comparan los de esa tarjeta/billetera y los que quedaron sin asignar (importes viejos).
+            const loose = !tx.credit_card_id && !tx.loan_id;
+            if (targetEntityForImport?.type === 'card') return tx.credit_card_id === targetEntityForImport.id || loose;
+            if (targetEntityForImport?.type === 'loan') return tx.loan_id === targetEntityForImport.id || loose;
             return true;
           })
           .forEach(tx => {
@@ -951,7 +953,7 @@ export default function FinanzasDRMIA() {
 
       // Movimientos ya guardados pero sin tarjeta (importes viejos): si el resumen los repite, se vinculan.
       let relinked = 0;
-      if (!targetEntityForImport && (assignedCardId || assignedLoanId)) {
+      if (assignedCardId || assignedLoanId) {
         const normD = (d: string) => (d || '').replace(/^(\[(USD|NEGOCIO)\]\s*)+/i, '').trim().toLowerCase().slice(0, 12);
         const kOf = (date: string, amt: number, cur: string, d: string, op?: string) => `${date}|${amt.toFixed(2)}|${cur}|${op === 'refund' || op === 'payment' ? `__${op}` : normD(d)}`;
         const loose = new Map<string, string[]>();
@@ -974,13 +976,6 @@ export default function FinanzasDRMIA() {
           if (linkErr) throw linkErr;
           relinked = idsToLink.length;
         }
-      }
-
-      if (validItems.length === 0 && relinked === 0) {
-        alert('Todos los movimientos ya se encontraban registrados en tu historial. No se agregaron duplicados.');
-        setIsImportModalOpen(false);
-        setIsSavingBatch(false);
-        return;
       }
 
       const rows = validItems.map((item: any) => {
@@ -1056,7 +1051,13 @@ export default function FinanzasDRMIA() {
       setImportFile(null);
       setTargetEntityForImport(null);
       await refreshAll(currentSessionUser.id);
-      alert(`¡Éxito! Se incorporaron ${rows.length} operaciones nuevas` + (relinked ? ` y se vincularon ${relinked} movimientos que ya tenías` : '') + '.' + balanceWarning);
+      const savedBalance = (assignedCardId || assignedLoanId) && (migrationData.total_ars != null || migrationData.total_usd != null);
+      alert(
+        rows.length === 0 && relinked === 0
+          ? 'Todos los movimientos ya estaban registrados, no se duplicó nada.' + (savedBalance ? ' Se actualizó el saldo.' : '')
+          : `¡Éxito! Se incorporaron ${rows.length} operaciones nuevas` + (relinked ? ` y se vincularon ${relinked} movimientos que ya tenías` : '') + (savedBalance ? '. Se actualizó el saldo.' : '.')
+      );
+      if (balanceWarning) alert(balanceWarning.trim());
     } catch (err: any) {
       alert('Error al guardar: ' + err.message);
     } finally {

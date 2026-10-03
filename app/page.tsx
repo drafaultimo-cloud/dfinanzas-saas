@@ -689,14 +689,16 @@ export default function FinanzasDRMIA() {
     e.preventDefault();
     if (!amount || !description || !user) return;
 
+    // Un reintegro (de terceros o nota de crédito) no es ingreso: resta del gasto del rubro elegido.
+    const isReimb = transType === 'income' && (incomeSource === 'reintegro_terceros' || incomeSource === 'reintegro');
     const payload = {
       user_id: user.id,
       amount: parseFloat(amount),
       currency: manualCurrency,
-      operation_type: 'purchase',
+      operation_type: isReimb ? 'refund' : 'purchase',
       description: profileType === 'business' ? `[NEGOCIO] ${description}` : description,
       type: transType,
-      category: transType === 'expense' ? category : 'Ingreso',
+      category: transType === 'expense' || isReimb ? category : 'Ingreso',
       income_source: transType === 'income' ? incomeSource : null,
       credit_card_id: transType === 'expense' && selectedCardId ? selectedCardId : null,
       loan_id: transType === 'expense' && selectedLoanId ? selectedLoanId : null,
@@ -789,7 +791,7 @@ export default function FinanzasDRMIA() {
       type: editTxType,
       operation_type: editTxOpType === 'fx' ? 'transfer' : editTxOpType,
       currency: editTxCurrency,
-      category: editTxOpType === 'fx' ? FX_CATEGORY : editTxType === 'expense' ? editTxCategory : 'Ingreso'
+      category: editTxOpType === 'fx' ? FX_CATEGORY : editTxType === 'expense' || editTxOpType === 'refund' ? editTxCategory : 'Ingreso'
     };
 
     const { error } = await supabase
@@ -1583,20 +1585,19 @@ export default function FinanzasDRMIA() {
     return `$ ${amountVal.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 
+  // Gasto por rubro, neto de reintegros asignados a ese rubro (p. ej. gastos de terceros que te devuelven).
   const expenseDataByCategory = useMemo(() => {
-    return purchaseTransactions
-      .reduce((acc: any[], item) => {
-        const catName = item.category || 'Otros';
-        const val = toMode(Number(item.amount || 0), item.currency);
-        const existing = acc.find(c => c.name === catName);
-        if (existing) {
-          existing.value += val;
-        } else {
-          acc.push({ name: catName, value: val });
-        }
-        return acc;
-      }, []);
-  }, [purchaseTransactions, toMode]);
+    const acc: any[] = [];
+    const add = (name: string, val: number) => {
+      const existing = acc.find(c => c.name === name);
+      if (existing) existing.value += val; else acc.push({ name, value: val });
+    };
+    purchaseTransactions.forEach(item => add(item.category || 'Otros', toMode(Number(item.amount || 0), item.currency)));
+    filteredTransactions
+      .filter(t => isRefund(t) && !isTransfer(t) && t.category && t.category !== 'Ingreso')
+      .forEach(t => add(t.category, -toMode(Number(t.amount || 0), t.currency)));
+    return acc.filter(c => c.value > 0.005);
+  }, [purchaseTransactions, filteredTransactions, toMode]);
 
   // Rubros disponibles: los base + los propios + los que ya aparecen en los movimientos.
   const allCategories = useMemo(() => buildCategories(userCategories, transactions), [userCategories, transactions]);
@@ -1618,6 +1619,12 @@ export default function FinanzasDRMIA() {
     if (!selectedCategoryDetail) return [];
     return purchaseTransactions.filter(t => (t.category || 'Otros') === selectedCategoryDetail);
   }, [purchaseTransactions, selectedCategoryDetail]);
+
+  // Reintegros asignados al rubro abierto (restan del gasto del rubro).
+  const refundsOfSelectedCategory = useMemo(() => {
+    if (!selectedCategoryDetail) return [];
+    return filteredTransactions.filter(t => isRefund(t) && !isTransfer(t) && t.category === selectedCategoryDetail);
+  }, [filteredTransactions, selectedCategoryDetail]);
 
   // ==========================================
   // RENDER: LANDING PAGE DE VENTA CON PROMO 40% OFF
@@ -2667,9 +2674,23 @@ export default function FinanzasDRMIA() {
                     <option value="salary">Sueldo Fijo</option>
                     <option value="freelance">Honorarios / Extras</option>
                     <option value="business">Ventas Comercio</option>
+                    <option value="reintegro_terceros">Reintegro de gastos de terceros</option>
                     <option value="reintegro">Reintegro / Nota de Crédito</option>
                     <option value="investments">Rendimientos / Inversiones</option>
                   </select>
+                  {(incomeSource === 'reintegro_terceros' || incomeSource === 'reintegro') && (
+                    <div className="mt-2">
+                      <label className="text-xs text-slate-500">Rubro del que se descuenta</label>
+                      <CategorySelect
+                        value={category}
+                        categories={allCategories}
+                        onChange={setCategory}
+                        onCreate={createCategory}
+                        className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">No suma como ingreso: resta del gasto de ese rubro.</p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -3697,6 +3718,7 @@ export default function FinanzasDRMIA() {
                   </h3>
                   <p className="text-[11px] text-slate-500">
                     {transactionsOfSelectedCategory.length} gastos que suman {formatMoney(sumMode(transactionsOfSelectedCategory), currencyMode)}
+                    {refundsOfSelectedCategory.length > 0 && ` − reintegros ${formatMoney(sumMode(refundsOfSelectedCategory), currencyMode)} = neto ${formatMoney(Math.max(0, sumMode(transactionsOfSelectedCategory) - sumMode(refundsOfSelectedCategory)), currencyMode)}`}
                   </p>
                 </div>
               </div>
@@ -3740,6 +3762,23 @@ export default function FinanzasDRMIA() {
                   </div>
                 ))
               )}
+              {refundsOfSelectedCategory.length > 0 && (
+                <p className="text-[11px] font-bold text-emerald-700 pt-2">Reintegros que restan ({refundsOfSelectedCategory.length})</p>
+              )}
+              {refundsOfSelectedCategory.map(t => (
+                <div key={t.id} className="p-3 bg-emerald-50/50 border border-emerald-100 rounded-xl flex justify-between items-center gap-3 text-xs">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-slate-800 break-words">{t.description}</p>
+                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">Fecha: {t.date}</p>
+                  </div>
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <span className="font-bold text-emerald-600 whitespace-nowrap">+{formatMoney(Number(t.amount), t.currency || 'ARS')}</span>
+                    <button onClick={() => openEditTransaction(t)} title="Modificar" className="shrink-0 p-1.5 text-slate-400 hover:text-blue-600 rounded bg-white border border-slate-200">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
 
             <div className="pt-2 border-t border-slate-100 flex justify-end">
@@ -3815,16 +3854,16 @@ export default function FinanzasDRMIA() {
                 >
                   <option value="purchase">Compra / Consumo (Gasto)</option>
                   <option value="payment">Pago de Tarjeta (Ingreso/Cancelación)</option>
-                  <option value="refund">Reintegro / Nota de Crédito (Saldo a favor)</option>
+                  <option value="refund">Reintegro (de terceros / nota de crédito): resta del gasto</option>
                   <option value="income">Ingreso real (rendimiento, cobro, transferencia de terceros)</option>
                   <option value="transfer">Transferencia entre mis cuentas (no cuenta)</option>
                   <option value="fx">Compra/venta de dólares (cambio de moneda, no cuenta)</option>
                 </select>
               </div>
 
-              {editTxType === 'expense' && (
+              {(editTxType === 'expense' || editTxOpType === 'refund') && (
                 <div>
-                  <label className="text-xs text-slate-500">Cambiar Rubro</label>
+                  <label className="text-xs text-slate-500">{editTxOpType === 'refund' ? 'Rubro del que se descuenta' : 'Cambiar Rubro'}</label>
                   <CategorySelect
                     value={editTxCategory}
                     categories={allCategories}

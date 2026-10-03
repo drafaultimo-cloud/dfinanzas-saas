@@ -30,9 +30,10 @@ Fecha de hoy: ${today}. Extraé TODOS los movimientos, distinguiendo con precisi
 5. amount siempre como número positivo con punto decimal (el signo lo da operation_type).
 6. date en formato YYYY-MM-DD; si falta el año, deducilo del período del resumen.
 7. installment_number / total_installments: 1 y 1 si no es una compra en cuotas.
+8. entity_name: nombre de la tarjeta o cuenta emisora tal como figura en el documento (ej: "Naranja X", "Mastercard Banco Nación", "Mercado Pago"). entity_kind: "card" si es un resumen de tarjeta de crédito, "wallet" si es un extracto de cuenta, billetera o préstamo.
 
 Devolvé ÚNICAMENTE un JSON con esta forma:
-{"entity_name":"","period":"YYYY-MM","total_ars":null,"total_usd":null,"items":[{"date":"","description":"","amount":0,"currency":"ARS","operation_type":"purchase","category":"","installment_number":1,"total_installments":1}]}
+{"entity_name":"","entity_kind":"card","period":"YYYY-MM","total_ars":null,"total_usd":null,"items":[{"date":"","description":"","amount":0,"currency":"ARS","operation_type":"purchase","category":"","installment_number":1,"total_installments":1}]}
 `;
 
 function toNumber(v: unknown): number | null {
@@ -81,6 +82,7 @@ function normalizeStatement(raw: any) {
 
   return {
     entity_name: String(raw.entity_name || '').slice(0, 80),
+    entity_kind: raw.entity_kind === 'wallet' ? 'wallet' : raw.entity_kind === 'card' ? 'card' : '',
     period: /^\d{4}-\d{2}$/.test(String(raw.period)) ? String(raw.period) : '',
     total_ars: toNumber(raw.total_ars),
     total_usd: toNumber(raw.total_usd),

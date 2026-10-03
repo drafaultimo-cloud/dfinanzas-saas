@@ -67,6 +67,25 @@ const isTransfer = (t: any) => t.operation_type === 'payment';
 const isRefund = (t: any) => t.operation_type === 'refund';
 // balance_ars pasó a ser el saldo; credit_limit solo es respaldo de datos viejos (?? y no ||, así un saldo 0 no muestra el límite)
 const cardBalanceArs = (c: any) => Number(c.balance_ars ?? c.credit_limit ?? 0);
+// Reconoce a qué tarjeta/billetera del usuario pertenece un resumen por el nombre que detectó la IA.
+const GENERIC_WORDS = new Set(['tarjeta','credito','debito','de','del','la','el','banco','resumen','cuenta','extracto','x','sa','s','a']);
+const nameTokens = (s: string) =>
+  (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(t => t && !GENERIC_WORDS.has(t));
+function guessEntity(name: string, kind: string, cards: any[], loans: any[]): string {
+  const want = nameTokens(name);
+  if (want.length === 0) return '';
+  const pool = (kind === 'wallet'
+    ? loans.map(l => ({ key: `loan:${l.id}`, name: l.entity }))
+    : cards.map(c => ({ key: `card:${c.id}`, name: c.name })));
+  const scored = pool
+    .map(e => ({ key: e.key, score: nameTokens(e.name).filter(t => want.includes(t)).length }))
+    .filter(e => e.score > 0)
+    .sort((a, b) => b.score - a.score);
+  // Solo se autoasigna si hay un ganador claro; si hay empate, que elija el usuario.
+  if (scored.length === 0) return '';
+  if (scored.length > 1 && scored[0].score === scored[1].score) return '';
+  return scored[0].key;
+}
 // Un movimiento es del Negocio si su descripción empieza con "[NEGOCIO]".
 const BUSINESS_TAG = '[NEGOCIO]';
 const isBusinessDesc = (d?: string | null) => (d || '').startsWith(BUSINESS_TAG);
@@ -160,6 +179,8 @@ export default function FinanzasDRMIA() {
   const [uploading, setUploading] = useState(false);
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [migrationData, setMigrationData] = useState<any>(null);
+  // A dónde se vinculan los movimientos importados: 'card:<id>' | 'loan:<id>' | 'new-card' | 'none'
+  const [importLink, setImportLink] = useState('none');
 
   // Tarjetas manual
   const [newCardName, setNewCardName] = useState('');
@@ -843,6 +864,10 @@ export default function FinanzasDRMIA() {
         });
       }
 
+      if (!targetEntityForImport) {
+        const guess = guessEntity(data.entity_name, data.entity_kind, creditCards, loans);
+        setImportLink(guess || (data.entity_kind === 'wallet' || !data.entity_name ? 'none' : 'new-card'));
+      }
       setMigrationData(data);
     } catch (err: any) {
       alert('Error al interpretar extracto: ' + err.message);
@@ -878,15 +903,62 @@ export default function FinanzasDRMIA() {
       const today = todayLocal();
       const validItems = migrationData.items.filter((item: any) => !item.isDuplicate);
 
-      if (validItems.length === 0) {
+      let assignedCardId: string | null = targetEntityForImport?.type === 'card' ? targetEntityForImport.id : null;
+      let assignedLoanId: string | null = targetEntityForImport?.type === 'loan' ? targetEntityForImport.id : null;
+      if (!targetEntityForImport) {
+        if (importLink.startsWith('card:')) assignedCardId = importLink.slice(5);
+        else if (importLink.startsWith('loan:')) assignedLoanId = importLink.slice(5);
+        else if (importLink === 'new-card') {
+          const { data: created, error: createErr } = await supabase
+            .from('credit_cards')
+            .insert([{
+              user_id: currentSessionUser.id,
+              name: migrationData.entity_name || 'Tarjeta importada',
+              closing_day: 20,
+              due_day: 5,
+              balance_ars: 0,
+              balance_usd: 0,
+            }])
+            .select('id')
+            .single();
+          if (createErr) throw createErr;
+          assignedCardId = created.id;
+        }
+      }
+
+      // Movimientos ya guardados pero sin tarjeta (importes viejos): si el resumen los repite, se vinculan.
+      let relinked = 0;
+      if (!targetEntityForImport && (assignedCardId || assignedLoanId)) {
+        const normD = (d: string) => (d || '').replace(/^\[(USD|NEGOCIO)\]\s*/i, '').trim().toLowerCase().slice(0, 12);
+        const kOf = (date: string, amt: number, cur: string, d: string) => `${date}|${amt.toFixed(2)}|${cur}|${normD(d)}`;
+        const loose = new Map<string, string[]>();
+        transactions.filter(t => !t.credit_card_id && !t.loan_id).forEach(t => {
+          const k = kOf(t.date || '', Math.abs(Number(t.amount)), t.currency || 'ARS', t.description || '');
+          loose.set(k, [...(loose.get(k) || []), t.id]);
+        });
+        const idsToLink: string[] = [];
+        migrationData.items.filter((i: any) => i.isDuplicate).forEach((i: any) => {
+          const k = kOf(i.date || '', Math.abs(Number(i.amount)), i.currency || 'ARS', i.description || '');
+          const list = loose.get(k);
+          if (list && list.length) idsToLink.push(list.shift() as string);
+        });
+        if (idsToLink.length > 0) {
+          const { error: linkErr } = await supabase
+            .from('transactions')
+            .update({ credit_card_id: assignedCardId, loan_id: assignedLoanId })
+            .in('id', idsToLink)
+            .eq('user_id', currentSessionUser.id);
+          if (linkErr) throw linkErr;
+          relinked = idsToLink.length;
+        }
+      }
+
+      if (validItems.length === 0 && relinked === 0) {
         alert('Todos los movimientos ya se encontraban registrados en tu historial. No se agregaron duplicados.');
         setIsImportModalOpen(false);
         setIsSavingBatch(false);
         return;
       }
-
-      const assignedCardId = targetEntityForImport?.type === 'card' ? targetEntityForImport.id : null;
-      const assignedLoanId = targetEntityForImport?.type === 'loan' ? targetEntityForImport.id : null;
 
       const rows = validItems.map((item: any) => {
         const isOpRefund = item.operation_type === 'refund';
@@ -916,8 +988,10 @@ export default function FinanzasDRMIA() {
         };
       });
 
-      const { error: txError } = await supabase.from('transactions').insert(rows);
-      if (txError) throw txError;
+      if (rows.length > 0) {
+        const { error: txError } = await supabase.from('transactions').insert(rows);
+        if (txError) throw txError;
+      }
 
       // Los saldos se actualizan DESPUÉS de guardar los movimientos y solo si el resumen
       // trae el total (antes, un total faltante pisaba el saldo real con 0).
@@ -944,7 +1018,7 @@ export default function FinanzasDRMIA() {
       setImportFile(null);
       setTargetEntityForImport(null);
       await refreshAll(currentSessionUser.id);
-      alert(`¡Éxito! Se incorporaron ${rows.length} operaciones distinguiendo compras, pagos y reintegros.` + balanceWarning);
+      alert(`¡Éxito! Se incorporaron ${rows.length} operaciones nuevas` + (relinked ? ` y se vincularon ${relinked} movimientos que ya tenías` : '') + '.' + balanceWarning);
     } catch (err: any) {
       alert('Error al guardar: ' + err.message);
     } finally {
@@ -2251,6 +2325,25 @@ export default function FinanzasDRMIA() {
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto space-y-4">
+                {!targetEntityForImport && (
+                  <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs space-y-1.5">
+                    <p className="text-indigo-900">
+                      {migrationData.entity_name
+                        ? <>La IA detectó el documento de <strong>{migrationData.entity_name}</strong>. Elegí a qué tarjeta o billetera vincularlo:</>
+                        : 'La IA no pudo identificar el emisor. Elegí a qué tarjeta o billetera vincularlo:'}
+                    </p>
+                    <select
+                      value={importLink}
+                      onChange={e => setImportLink(e.target.value)}
+                      className="w-full border border-indigo-200 rounded-lg px-2 py-1.5 bg-white text-slate-800"
+                    >
+                      {creditCards.map(c => <option key={c.id} value={`card:${c.id}`}>Tarjeta: {c.name}</option>)}
+                      {loans.map(l => <option key={l.id} value={`loan:${l.id}`}>Billetera/Préstamo: {l.entity}</option>)}
+                      {migrationData.entity_name && <option value="new-card">Crear tarjeta nueva: {migrationData.entity_name}</option>}
+                      <option value="none">No vincular (se puede asignar después)</option>
+                    </select>
+                  </div>
+                )}
                 {/* Resumen de totales detectados en el PDF */}
                 {(migrationData.total_ars !== undefined || migrationData.total_usd !== undefined) && (
                   <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl text-xs flex justify-between items-center">

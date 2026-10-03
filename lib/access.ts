@@ -13,6 +13,7 @@ export type AccessState = {
   plan: PlanId | null; // null = sin acceso
   trialDaysLeft: number;
   paidUntil: string | null; // ISO
+  free?: boolean; // acceso gratuito otorgado por el administrador
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -29,6 +30,10 @@ export function isReceiptValid(r: ReceiptRow): boolean {
   if (r.admin_status === 'rejected') return false;
   return r.admin_status === 'verified' || r.ai_status === 'approved_by_ai';
 }
+
+/** Acceso gratis otorgado a mano por el admin (fila con ai_status 'free_grant'). No vence. */
+export const FREE_GRANT = 'free_grant';
+export const isFreeGrant = (r: ReceiptRow) => r.ai_status === FREE_GRANT && r.admin_status === 'verified';
 
 export function isAdminEmail(email?: string | null, extra: string[] = []): boolean {
   if (!email) return false;
@@ -48,6 +53,11 @@ export function computeAccess(params: {
 
   if (isAdminEmail(params.email, params.extraAdmins)) {
     return { status: 'admin', plan: 'pro', trialDaysLeft: TRIAL_DAYS, paidUntil: null };
+  }
+
+  const grant = params.receipts.find(isFreeGrant);
+  if (grant) {
+    return { status: 'paid', plan: receiptPlan(grant), trialDaysLeft: 0, paidUntil: '2099-12-31T00:00:00.000Z', free: true };
   }
 
   // Pagos: se acumulan. Cada comprobante válido suma PAID_DAYS desde el mayor entre

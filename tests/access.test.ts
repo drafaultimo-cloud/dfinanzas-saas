@@ -21,3 +21,12 @@ test('el rechazo del admin gana sobre la IA (cancelación)', () => {
   const r = [{ created_at: '2026-10-09T00:00:00Z', ai_status: 'approved_by_ai', admin_status: 'rejected', plan: 'pro' }];
   assert.equal(computeAccess({ ...base, receipts: r }).status, 'expired');
 });
+
+test('acceso gratuito (cortesía): Pro sin vencimiento; si se borra la fila vuelve a lo normal', () => {
+  const g = { created_at: '2026-01-02T00:00:00Z', ai_status: 'free_grant', admin_status: 'verified', plan: 'pro' };
+  const a = computeAccess({ ...base, receipts: [g] });
+  assert.equal(a.status, 'paid');
+  assert.equal(a.free, true);
+  assert.equal(a.plan, 'pro');
+  assert.equal(computeAccess({ ...base, receipts: [] }).status, 'expired');
+});

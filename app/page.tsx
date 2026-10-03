@@ -623,6 +623,28 @@ export default function FinanzasDRMIA() {
     }
   }
 
+  async function handleFreeAccess(u: any, grant: boolean) {
+    const msg = grant
+      ? `¿Dejar GRATIS a ${u.user_email}? Tendrá el plan Pro sin pagar y sin vencimiento hasta que se lo quites.`
+      : `¿Quitar el acceso gratuito a ${u.user_email}? Vuelve a su estado normal (prueba o vencido).`;
+    if (!confirm(msg)) return;
+    setAdminBusy(true);
+    try {
+      const res = await authFetch('/api/admin/overview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: u.user_id, action: grant ? 'grant_free' : 'revoke_free' }),
+      });
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || res.status);
+      await loadAdminMetrics();
+    } catch (err: any) {
+      alert('No se pudo actualizar: ' + (err?.message || err));
+    } finally {
+      setAdminBusy(false);
+    }
+  }
+
   async function handleCancelSubscription(u: any) {
     if (!confirm(`¿Cancelar la suscripción de ${u.user_email} por falta de pago o comprobante inválido?\n\nPierde el acceso pago y su próximo comprobante quedará en revisión manual.`)) return;
     setAdminBusy(true);
@@ -1874,7 +1896,7 @@ export default function FinanzasDRMIA() {
           </div>
 
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-tight">
-            Controlá tus tarjetas en <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00D7FF] to-cyan-400">Pesos y Dólares</span> con Inteligencia Artificial
+            Controlá tus tarjetas en <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00D7FF] to-cyan-400">Pesos y Dólares</span> con Finanzas de DRM-IA
           </h1>
 
           <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto font-normal leading-relaxed">
@@ -2211,7 +2233,7 @@ export default function FinanzasDRMIA() {
                     )}
                     {hasPaidPlan && (
                       <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
-                        {`Plan ${access?.plan === 'pro' ? 'Pro IA' : 'Esencial'} activo`}{access?.paidUntil ? ` · hasta ${new Date(access.paidUntil).toLocaleDateString('es-AR')}` : ''}
+                        {`Plan ${access?.plan === 'pro' ? 'Pro IA' : 'Esencial'} activo`}{access?.free ? ' · acceso gratuito' : access?.paidUntil ? ` · hasta ${new Date(access.paidUntil).toLocaleDateString('es-AR')}` : ''}
                       </span>
                     )}
                   </>
@@ -4362,6 +4384,7 @@ export default function FinanzasDRMIA() {
           };
         }).sort((x: any, y: any) => (y.pending - x.pending) || ((x.acc.status === 'paid' ? 0 : 1) - (y.acc.status === 'paid' ? 0 : 1)));
         const stLabel: any = {
+          free: { t: 'Gratis', c: 'bg-teal-100 text-teal-800' },
           paid: { t: 'Pago', c: 'bg-emerald-100 text-emerald-800' },
           trial: { t: 'Prueba', c: 'bg-indigo-100 text-indigo-800' },
           expired: { t: 'Vencido', c: 'bg-rose-100 text-rose-800' },
@@ -4409,14 +4432,15 @@ export default function FinanzasDRMIA() {
                 <>
                   {userRows.length === 0 && <p className="text-xs text-slate-500 text-center py-8">Todavía no hay usuarios registrados.</p>}
                   {userRows.map(({ u, acc, last, pending, manual }: any) => {
-                    const st = stLabel[acc.status];
+                    const st = stLabel[acc.free ? 'free' : acc.status];
                     return (
                       <div key={u.user_id} className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-2 text-xs">
                         <div className="min-w-0">
                           <p className="font-bold text-slate-900 truncate">{u.user_email}</p>
                           <p className="text-slate-500">
                             Alta {fmtDate(u.created_at)}
-                            {acc.status === 'paid' && ` · paga hasta ${fmtDate(acc.paidUntil || undefined)} (${(acc.plan || '').toUpperCase()})`}
+                            {acc.free && ' · acceso gratuito sin vencimiento (Pro)'}
+                            {acc.status === 'paid' && !acc.free && ` · paga hasta ${fmtDate(acc.paidUntil || undefined)} (${(acc.plan || '').toUpperCase()})`}
                             {acc.status === 'trial' && ` · prueba: ${acc.trialDaysLeft} día(s)`}
                             {last && ` · último comprobante ${fmtDate(last.created_at)}`}
                           </p>
@@ -4426,7 +4450,12 @@ export default function FinanzasDRMIA() {
                           <span className={`px-2 py-0.5 rounded-full font-bold ${st.c}`}>{st.t}</span>
                           {pending > 0 && <span className="px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-800">{pending} por revisar</span>}
                           <button onClick={() => openChatWithUser(u)} className="bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Chat</button>
-                          {acc.status === 'paid' && (
+                          {acc.free ? (
+                            <button disabled={adminBusy} onClick={() => handleFreeAccess(u, false)} className="bg-slate-500 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Quitar gratis</button>
+                          ) : (
+                            <button disabled={adminBusy} onClick={() => handleFreeAccess(u, true)} className="bg-teal-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Dejar gratis</button>
+                          )}
+                          {acc.status === 'paid' && !acc.free && (
                             <button disabled={adminBusy} onClick={() => handleCancelSubscription(u)} className="bg-rose-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Cancelar suscripción</button>
                           )}
                         </div>

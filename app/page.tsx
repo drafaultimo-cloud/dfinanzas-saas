@@ -93,6 +93,35 @@ const isInflow = (item: any) =>
   : item.operation_type === 'refund' || item.operation_type === 'income' ? true
   : item.direction ? item.direction === 'in'
   : item.operation_type === 'payment';
+// Cuenta de origen/destino de una transferencia: 'card:<id>' | 'loan:<id>'.
+const accountKeyOf = (t: any) => t.credit_card_id ? `card:${t.credit_card_id}` : t.loan_id ? `loan:${t.loan_id}` : '';
+// Intenta deducir con qué otra cuenta se movió la plata: por nombre en la descripción o por un movimiento
+// del mismo monto (±3 días) y sentido contrario en otra cuenta.
+function guessCounterpart(item: any, selfKey: string, cards: any[], loans: any[], txs: any[]): string {
+  const accounts = [
+    ...cards.map(c => ({ key: `card:${c.id}`, name: c.name as string })),
+    ...loans.map(l => ({ key: `loan:${l.id}`, name: l.entity as string })),
+  ].filter(a => a.key !== selfKey);
+  const descTokens = nameTokens(item.description || '');
+  const byName = accounts
+    .map(a => ({ key: a.key, score: nameTokens(a.name).filter(t => descTokens.includes(t)).length }))
+    .filter(a => a.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (byName.length === 1 || (byName.length > 1 && byName[0].score > byName[1].score)) return byName[0].key;
+  const amt = Math.abs(Number(item.amount));
+  const day = (d: string) => new Date(`${d}T00:00:00`).getTime();
+  const inflow = isInflow(item);
+  const matches = txs.filter(t =>
+    accountKeyOf(t) && accountKeyOf(t) !== selfKey &&
+    (t.operation_type === 'transfer' || t.operation_type === 'payment') &&
+    (t.currency || 'ARS') === (item.currency || 'ARS') &&
+    Math.abs(Math.abs(Number(t.amount)) - amt) < 0.01 &&
+    (t.type === 'income') !== inflow &&
+    Math.abs(day(t.date) - day(item.date)) <= 3 * 86400000
+  );
+  const keys = Array.from(new Set(matches.map(accountKeyOf)));
+  return keys.length === 1 ? keys[0] : '';
+}
 // Un movimiento es del Negocio si su descripción empieza con "[NEGOCIO]".
 const BUSINESS_TAG = '[NEGOCIO]';
 const isBusinessDesc = (d?: string | null) => (d || '').startsWith(BUSINESS_TAG);
@@ -878,13 +907,82 @@ export default function FinanzasDRMIA() {
 
       if (!targetEntityForImport) {
         const guess = guessEntity(data.entity_name, data.entity_kind, creditCards, loans);
-        setImportLink(guess || (data.entity_kind === 'wallet' || !data.entity_name ? 'none' : 'new-card'));
+        setImportLink(guess || (!data.entity_name ? 'none' : data.entity_kind === 'wallet' ? 'new-loan' : 'new-card'));
+        // Sugerir la cuenta de la otra punta en transferencias y pagos
+        const selfKey = guess || '';
+        data.items = (data.items || []).map((it: any) =>
+          (it.operation_type === 'transfer' || it.operation_type === 'payment')
+            ? { ...it, counterpart: guessCounterpart(it, selfKey, creditCards, loans, transactions) }
+            : it);
       }
       setMigrationData(data);
     } catch (err: any) {
       alert('Error al interpretar extracto: ' + err.message);
     } finally {
       setUploading(false);
+    }
+  }
+
+  // Cambia el tipo de documento (tarjeta o billetera/cuenta) y recalcula sentidos y vínculo sugerido.
+  function handleChangeKind(kind: string) {
+    if (!migrationData) return;
+    const isWallet = kind === 'wallet';
+    const items = (migrationData.items || []).map((it: any) =>
+      it.operation_type === 'payment' ? { ...it, direction: isWallet ? 'out' : 'in' } : it);
+    const guess = guessEntity(migrationData.entity_name, kind, creditCards, loans);
+    setImportLink(guess || (!migrationData.entity_name ? 'none' : isWallet ? 'new-loan' : 'new-card'));
+    setMigrationData({ ...migrationData, entity_kind: kind, items });
+  }
+
+  function handleChangePreviewCounterpart(index: number, key: string) {
+    if (!migrationData?.items) return;
+    const updated = [...migrationData.items];
+    updated[index] = { ...updated[index], counterpart: key };
+    setMigrationData({ ...migrationData, items: updated });
+  }
+
+  // Reasigna el origen/destino de una transferencia ya guardada.
+  async function setTransferAccount(id: string, key: string) {
+    if (!user) return;
+    const { error } = await supabase.from('transactions').update({ transfer_account: key || null }).eq('id', id).eq('user_id', user.id);
+    if (error) { alert('No se pudo guardar (¿corriste la migración 006?): ' + error.message); return; }
+    await refreshAll(user.id);
+  }
+
+  // Opciones de cuenta para elegir origen/destino de una transferencia (excluye la propia).
+  const counterpartOptions = (selfKey: string) => [
+    ...creditCards.map(c => ({ key: `card:${c.id}`, label: `Tarjeta: ${c.name}` })),
+    ...loans.map(l => ({ key: `loan:${l.id}`, label: `Cuenta/Billetera: ${l.entity}` })),
+  ].filter(o => o.key !== selfKey);
+  const accountName = (key?: string | null) => {
+    if (!key) return '';
+    if (key.startsWith('card:')) return creditCards.find(c => `card:${c.id}` === key)?.name || '';
+    return loans.find(l => `loan:${l.id}` === key)?.entity || '';
+  };
+
+  // Convierte una "tarjeta" mal creada (ej. una billetera importada como tarjeta) en billetera/cuenta.
+  async function convertCardToWallet(card: any) {
+    if (!user) return;
+    if (!confirm(`¿Convertir "${card.name}" en billetera/cuenta? Sus movimientos pasan a la billetera y el saldo ($ ${Number(card.balance_ars || 0).toLocaleString('es-AR')}) se toma como dinero disponible.`)) return;
+    try {
+      const { data: created, error } = await supabase.from('loans').insert([{
+        user_id: user.id, entity: card.name, total_amount: 0, installment_amount: 0,
+        total_installments: 1, paid_installments: 1, due_day: 10,
+        balance_ars: Number(card.balance_ars || 0), balance_usd: Number(card.balance_usd || 0),
+      }]).select('id').single();
+      if (error) throw error;
+      const { error: moveErr } = await supabase.from('transactions')
+        .update({ loan_id: created.id, credit_card_id: null }).eq('credit_card_id', card.id).eq('user_id', user.id);
+      if (moveErr) throw moveErr;
+      // En una billetera, un "pago de tarjeta" es una salida.
+      await supabase.from('transactions').update({ type: 'expense' })
+        .eq('loan_id', created.id).eq('operation_type', 'payment').eq('user_id', user.id);
+      const { error: delErr } = await supabase.from('credit_cards').delete().eq('id', card.id).eq('user_id', user.id);
+      if (delErr) throw delErr;
+      await refreshAll(user.id);
+      alert('Listo: ahora figura como billetera/cuenta.');
+    } catch (err: any) {
+      alert('No se pudo convertir: ' + err.message);
     }
   }
 
@@ -933,6 +1031,23 @@ export default function FinanzasDRMIA() {
       if (!targetEntityForImport) {
         if (importLink.startsWith('card:')) assignedCardId = importLink.slice(5);
         else if (importLink.startsWith('loan:')) assignedLoanId = importLink.slice(5);
+        else if (importLink === 'new-loan') {
+          const { data: createdLoan, error: loanErr } = await supabase
+            .from('loans')
+            .insert([{
+              user_id: currentSessionUser.id,
+              entity: migrationData.entity_name || 'Billetera importada',
+              total_amount: 0,
+              installment_amount: 0,
+              total_installments: 1,
+              paid_installments: 1,
+              due_day: 10,
+            }])
+            .select('id')
+            .single();
+          if (loanErr) throw loanErr;
+          assignedLoanId = createdLoan.id;
+        }
         else if (importLink === 'new-card') {
           const { data: created, error: createErr } = await supabase
             .from('credit_cards')
@@ -1003,6 +1118,7 @@ export default function FinanzasDRMIA() {
           income_source: isOpRefund ? 'reintegro' : isOpPayment ? 'pago_tarjeta' : op === 'income' ? 'other' : null,
           credit_card_id: assignedCardId,
           loan_id: assignedLoanId,
+          ...((op === 'transfer' || op === 'payment') && item.counterpart ? { transfer_account: item.counterpart } : {}),
           date: (item.date && item.date.length === 10) ? item.date : today,
           installment_number: Number(item.installment_number) || 1,
           total_installments: Number(item.total_installments) || 1
@@ -1012,6 +1128,22 @@ export default function FinanzasDRMIA() {
       if (rows.length > 0) {
         const { error: txError } = await supabase.from('transactions').insert(rows);
         if (txError) throw txError;
+      }
+
+      // Punta contraria: si el movimiento emparejado en la otra cuenta no sabía su origen/destino, se lo completamos.
+      const selfAccountKey = assignedCardId ? `card:${assignedCardId}` : assignedLoanId ? `loan:${assignedLoanId}` : '';
+      if (selfAccountKey) {
+        const day = (d: string) => new Date(`${d}T00:00:00`).getTime();
+        for (const it of validItems.filter((i: any) => i.counterpart && (i.operation_type === 'transfer' || i.operation_type === 'payment'))) {
+          const other = transactions.find(t =>
+            accountKeyOf(t) === it.counterpart && !t.transfer_account &&
+            (t.operation_type === 'transfer' || t.operation_type === 'payment') &&
+            (t.currency || 'ARS') === (it.currency || 'ARS') &&
+            Math.abs(Math.abs(Number(t.amount)) - Math.abs(Number(it.amount))) < 0.01 &&
+            (t.type === 'income') !== isInflow(it) &&
+            Math.abs(day(t.date) - day(it.date)) <= 3 * 86400000);
+          if (other) await supabase.from('transactions').update({ transfer_account: selfAccountKey }).eq('id', other.id).eq('user_id', currentSessionUser.id);
+        }
       }
 
       // Los saldos se actualizan DESPUÉS de guardar los movimientos y solo si el resumen
@@ -1852,6 +1984,13 @@ export default function FinanzasDRMIA() {
                       </div>
 
                       <button
+                        onClick={() => convertCardToWallet(c)}
+                        title="Si esto en realidad es una billetera o caja de ahorro, convertila"
+                        className="w-full mt-2 py-1 px-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[10px] font-bold rounded-lg cursor-pointer"
+                      >
+                        No es tarjeta: convertir en billetera/cuenta
+                      </button>
+                      <button
                         onClick={() => openMovements('card', c.id, c.name)}
                         className="w-full mt-2 py-1.5 px-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
                       >
@@ -2179,6 +2318,19 @@ export default function FinanzasDRMIA() {
                           Transferencia propia
                         </span>
                       )}
+                      {(t.operation_type === 'transfer' || t.operation_type === 'payment') && (
+                        <select
+                          value={t.transfer_account || ''}
+                          onChange={e => setTransferAccount(t.id, e.target.value)}
+                          title="¿De dónde vino o a dónde fue?"
+                          className="border border-violet-200 rounded-lg px-1 py-0.5 bg-white text-[10px] text-slate-700 max-w-[170px]"
+                        >
+                          <option value="">{t.type === 'income' ? 'Viene de: sin asignar' : 'Va a: sin asignar'}</option>
+                          {counterpartOptions(accountKeyOf(t)).map(o => (
+                            <option key={o.key} value={o.key}>{t.type === 'income' ? 'Viene de: ' : 'Va a: '}{o.label}</option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
                       <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
@@ -2392,9 +2544,21 @@ export default function FinanzasDRMIA() {
                     >
                       {creditCards.map(c => <option key={c.id} value={`card:${c.id}`}>Tarjeta: {c.name}</option>)}
                       {loans.map(l => <option key={l.id} value={`loan:${l.id}`}>Billetera/Préstamo: {l.entity}</option>)}
+                      {migrationData.entity_name && <option value="new-loan">Crear billetera/cuenta nueva: {migrationData.entity_name}</option>}
                       {migrationData.entity_name && <option value="new-card">Crear tarjeta nueva: {migrationData.entity_name}</option>}
                       <option value="none">No vincular (se puede asignar después)</option>
                     </select>
+                    <div className="flex items-center gap-2 pt-1">
+                      <span className="text-indigo-900">Tipo de documento:</span>
+                      <select
+                        value={migrationData.entity_kind === 'wallet' ? 'wallet' : 'card'}
+                        onChange={e => handleChangeKind(e.target.value)}
+                        className="border border-indigo-200 rounded-lg px-2 py-1 bg-white text-slate-800"
+                      >
+                        <option value="card">Resumen de tarjeta de crédito</option>
+                        <option value="wallet">Billetera / cuenta (caja de ahorro)</option>
+                      </select>
+                    </div>
                   </div>
                 )}
                 {/* Resumen de totales detectados en el PDF */}
@@ -2487,6 +2651,24 @@ export default function FinanzasDRMIA() {
                               <option value="transfer">Transferencia propia</option>
                               <option value="payment">Pago de tarjeta</option>
                               <option value="refund">Reintegro</option>
+                            </select>
+                          )}
+
+                          {!isDup && (item.operation_type === 'transfer' || item.operation_type === 'payment') && (
+                            <select
+                              value={item.counterpart || ''}
+                              onChange={e => handleChangePreviewCounterpart(idx, e.target.value)}
+                              title="¿De dónde vino o a dónde fue?"
+                              className="border border-violet-200 rounded-lg px-1.5 py-1 bg-white text-[10px] text-slate-700 max-w-[170px]"
+                            >
+                              <option value="">{isIn ? 'Viene de: sin asignar' : 'Va a: sin asignar'}</option>
+                              {counterpartOptions(
+                                targetEntityForImport
+                                  ? `${targetEntityForImport.type === 'card' ? 'card' : 'loan'}:${targetEntityForImport.id}`
+                                  : (importLink.startsWith('card:') || importLink.startsWith('loan:') ? importLink : '')
+                              ).map(o => (
+                                <option key={o.key} value={o.key}>{isIn ? 'Viene de: ' : 'Va a: '}{o.label}</option>
+                              ))}
                             </select>
                           )}
 
@@ -2631,6 +2813,19 @@ export default function FinanzasDRMIA() {
                           <span className="font-mono">{t.date}</span>
                           {t.category && <span>• {t.category}</span>}
                           {label && <span className="text-amber-600 font-semibold">• {label}</span>}
+                          {(t.operation_type === 'transfer' || t.operation_type === 'payment') && (
+                            <select
+                              value={t.transfer_account || ''}
+                              onChange={e => setTransferAccount(t.id, e.target.value)}
+                              title="¿De dónde vino o a dónde fue?"
+                              className="border border-violet-200 rounded px-1 py-0.5 bg-white text-[10px] text-slate-700 max-w-[160px]"
+                            >
+                              <option value="">{isIn ? 'Viene de: sin asignar' : 'Va a: sin asignar'}</option>
+                              {counterpartOptions(accountKeyOf(t) || (movementsEntity ? `${movementsEntity.kind}:${movementsEntity.id}` : '')).map(o => (
+                                <option key={o.key} value={o.key}>{isIn ? 'Viene de: ' : 'Va a: '}{o.label}</option>
+                              ))}
+                            </select>
+                          )}
                           <span className={`px-1.5 py-0.5 rounded font-bold ${biz ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
                             {biz ? 'Negocio' : 'Personal'}
                           </span>

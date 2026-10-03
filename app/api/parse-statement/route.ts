@@ -34,7 +34,7 @@ Fecha de hoy: ${today}. Extraé TODOS los movimientos, distinguiendo con precisi
 6. date en formato YYYY-MM-DD; si falta el año, deducilo del período del resumen.
 7. installment_number / total_installments: 1 y 1 si no es una compra en cuotas.
 7b. direction: "in" si el dinero entra a la cuenta (ingreso, crédito), "out" si sale (egreso, débito).
-8. entity_name: nombre de la tarjeta o cuenta emisora tal como figura en el documento (ej: "Naranja X", "Mastercard Banco Nación", "Mercado Pago"). holder_name: nombre completo del titular del documento. entity_kind: "card" si es un resumen de tarjeta de crédito, "wallet" si es un extracto de cuenta, billetera o préstamo.
+8. entity_name: nombre de la tarjeta o cuenta emisora tal como figura en el documento (ej: "Naranja X", "Mastercard Banco Nación", "Mercado Pago"). holder_name: nombre completo del titular del documento. entity_kind: "card" SOLO si es un resumen de tarjeta de crédito (tiene fecha de cierre/vencimiento, pago mínimo, límite de compra, total a pagar). "wallet" si es un extracto de cuenta, caja de ahorro, billetera virtual o préstamo: señales como CVU/CBU, "Resumen de cuenta", "Saldo inicial / Saldo final", "Entradas / Salidas", columna "Saldo" tras cada movimiento, "Rendimientos". Mercado Pago, Ualá, Naranja X Billetera y similares con esas señales son "wallet", aunque la marca también tenga una tarjeta.
 
 Devolvé ÚNICAMENTE un JSON con esta forma:
 {"entity_name":"","entity_kind":"card","holder_name":"","period":"YYYY-MM","total_ars":null,"total_usd":null,"items":[{"date":"","description":"","amount":0,"currency":"ARS","operation_type":"purchase","direction":"out","category":"","installment_number":1,"total_installments":1}]}

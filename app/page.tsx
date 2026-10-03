@@ -120,6 +120,8 @@ export default function FinanzasDRMIA() {
   const [movMonth, setMovMonth] = useState('all');
   const [movSelected, setMovSelected] = useState<string[]>([]);
   const [movSaving, setMovSaving] = useState(false);
+  // 'linked' = asignados a esta tarjeta; 'unassigned' = sin tarjeta ni billetera (importes viejos); 'all' = todos
+  const [movScope, setMovScope] = useState<'linked' | 'unassigned' | 'all'>('linked');
   const [editTxType, setEditTxType] = useState<'income' | 'expense'>('income');
   const [editTxOpType, setEditTxOpType] = useState<'purchase' | 'payment' | 'refund'>('purchase');
   const [editTxCurrency, setEditTxCurrency] = useState<'ARS' | 'USD'>('ARS');
@@ -587,7 +589,31 @@ export default function FinanzasDRMIA() {
   function openMovements(kind: 'card' | 'loan', id: string, name: string) {
     setMovSelected([]);
     setMovMonth(selectedMonth);
+    // Si todavía no hay movimientos asignados a esta tarjeta/billetera, mostrar todos
+    const hasLinked = transactions.some(t => (kind === 'card' ? t.credit_card_id : t.loan_id) === id);
+    setMovScope(hasLinked ? 'linked' : 'all');
     setMovementsEntity({ kind, id, name });
+  }
+
+  // Asigna movimientos sueltos a la tarjeta/billetera abierta en el listado.
+  async function assignTransactionsToEntity(ids: string[]) {
+    if (!user || !movementsEntity || ids.length === 0) return;
+    setMovSaving(true);
+    try {
+      const patch = movementsEntity.kind === 'card'
+        ? { credit_card_id: movementsEntity.id, loan_id: null }
+        : { loan_id: movementsEntity.id, credit_card_id: null };
+      const { error } = await supabase
+        .from('transactions')
+        .update(patch)
+        .in('id', ids)
+        .eq('user_id', user.id);
+      if (error) alert('No se pudo asignar: ' + error.message);
+      setMovSelected([]);
+      await refreshAll(user.id);
+    } finally {
+      setMovSaving(false);
+    }
   }
 
   function openEditTransaction(tx: any) {
@@ -2012,7 +2038,10 @@ export default function FinanzasDRMIA() {
                 <div key={t.id} className="flex justify-between items-center p-3 rounded-xl border border-slate-50 hover:bg-slate-50/50">
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="text-xs font-semibold text-slate-800">{t.description}</p>
+                      <p className="text-xs font-semibold text-slate-800">{withProfile(t.description, false)}</p>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${profileType === 'business' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'}`}>
+                        {profileType === 'business' ? 'Negocio' : 'Personal'}
+                      </span>
                       {isRefund && (
                         <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-1.5 py-0.2 rounded">
                           Reintegro
@@ -2034,7 +2063,14 @@ export default function FinanzasDRMIA() {
                     <span className={`text-xs font-bold ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-600'}`}>
                       {t.type === 'income' ? '+' : '-'}{formatMoney(Number(t.amount), isUsd ? 'USD' : 'ARS')}
                     </span>
-                    <button 
+                    <button
+                      onClick={() => moveTransactionsToProfile([t.id], profileType === 'personal')}
+                      title={profileType === 'personal' ? 'Pasar este movimiento a Negocio' : 'Pasar este movimiento a Personal'}
+                      className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-700 hover:bg-slate-100 whitespace-nowrap cursor-pointer"
+                    >
+                      {profileType === 'personal' ? 'A Negocio' : 'A Personal'}
+                    </button>
+                    <button
                       onClick={() => openEditTransaction(t)}
                       title="Editar movimiento"
                       className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
@@ -2326,10 +2362,12 @@ export default function FinanzasDRMIA() {
       {/* MODAL: MOVIMIENTOS DE UNA TARJETA / BILLETERA (pasar a Negocio o a Personal) */}
       {movementsEntity && (() => {
         const rows = transactions
-          .filter(t =>
-            (movementsEntity.kind === 'card' ? t.credit_card_id : t.loan_id) === movementsEntity.id &&
-            (movMonth === 'all' || (t.date && t.date.startsWith(movMonth)))
-          )
+          .filter(t => {
+            const linked = (movementsEntity.kind === 'card' ? t.credit_card_id : t.loan_id) === movementsEntity.id;
+            const unassigned = !t.credit_card_id && !t.loan_id;
+            const scopeOk = movScope === 'all' ? true : movScope === 'linked' ? linked : unassigned;
+            return scopeOk && (movMonth === 'all' || (t.date && t.date.startsWith(movMonth)));
+          })
           .sort((a, b) => String(b.date).localeCompare(String(a.date)));
         const allSelected = rows.length > 0 && rows.every(t => movSelected.includes(t.id));
         const nBusiness = rows.filter(t => isBusinessDesc(t.description)).length;
@@ -2357,6 +2395,15 @@ export default function FinanzasDRMIA() {
                   <option value="all">Todos los meses</option>
                   {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
+                <select
+                  value={movScope}
+                  onChange={e => { setMovScope(e.target.value as 'linked' | 'unassigned' | 'all'); setMovSelected([]); }}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700"
+                >
+                  <option value="linked">Asignados a esta {movementsEntity.kind === 'card' ? 'tarjeta' : 'billetera'}</option>
+                  <option value="unassigned">Sin tarjeta asignada</option>
+                  <option value="all">Todos los movimientos</option>
+                </select>
                 <label className="flex items-center gap-1.5 text-slate-600 cursor-pointer">
                   <input
                     type="checkbox"
@@ -2365,7 +2412,14 @@ export default function FinanzasDRMIA() {
                   />
                   Seleccionar todos
                 </label>
-                <div className="flex gap-2 ml-auto">
+                <div className="flex flex-wrap gap-2 ml-auto">
+                  <button
+                    disabled={movSelected.length === 0 || movSaving}
+                    onClick={() => assignTransactionsToEntity(movSelected)}
+                    className="px-3 py-1.5 rounded-lg bg-white text-slate-700 font-bold border border-slate-200 disabled:opacity-40 cursor-pointer"
+                  >
+                    Asignar a esta {movementsEntity.kind === 'card' ? 'tarjeta' : 'billetera'}
+                  </button>
                   <button
                     disabled={movSelected.length === 0 || movSaving}
                     onClick={() => moveTransactionsToProfile(movSelected, true)}

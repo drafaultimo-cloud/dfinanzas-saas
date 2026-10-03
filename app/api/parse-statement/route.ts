@@ -28,7 +28,8 @@ Fecha de hoy: ${today}. Extraé TODOS los movimientos, distinguiendo con precisi
    - "income": dinero que ENTRA como ingreso real: rendimientos o intereses ganados, transferencias recibidas de OTRAS personas, depósitos, cobros, sueldos.
    - "transfer": transferencia entre cuentas PROPIAS del titular (enviada o recibida) cuando el nombre de la contraparte coincide con el del titular del documento. No es ingreso ni gasto.
 2. currency: "USD" si figura en columna U$S/USS o indica dólares; "ARS" si son pesos.
-3. total_ars / total_usd: en un resumen de TARJETA, el saldo total adeudado en pesos y en dólares (negativo si está a favor). En un extracto de CUENTA o BILLETERA, el dinero final disponible al cierre del período ("Dinero final", "Total disponible final"), en pesos y en dólares. null si no figura.
+3. total_ars / total_usd: en un resumen de TARJETA, el TOTAL A PAGAR del resumen ACTUAL, que es el que cierra en la fecha más reciente del documento ("Tu total a pagar es", "Total a pagar", "Total" al final del detalle de consumos), en pesos y en dólares (negativo si está a favor). NUNCA uses el importe del resumen anterior (frases como "tu resumen anterior cerró... por $X", "pago del resumen anterior", "del mes pasado") ni el pago mínimo. En un extracto de CUENTA o BILLETERA, el dinero final disponible al cierre del período ("Dinero final", "Total disponible final"), en pesos y en dólares. null si no figura.
+3b. statement_close_date: fecha de cierre del resumen o extracto ACTUAL en formato YYYY-MM-DD (en una tarjeta, "El resumen actual cerró el 27/09"; en una cuenta, la última fecha del período). statement_due_date: fecha de vencimiento del pago ("vence el 10/10/26") o null. Si no figuran, null.
 4. category: una de ${STATEMENT_CATEGORIES.map(c => `"${c}"`).join(', ')}. Si no podés determinar el comercio, escribí EXACTAMENTE "Por Clasificar".
 5. amount siempre como número positivo con punto decimal (el signo lo da operation_type).
 6. date en formato YYYY-MM-DD; si falta el año, deducilo del período del resumen.
@@ -37,7 +38,7 @@ Fecha de hoy: ${today}. Extraé TODOS los movimientos, distinguiendo con precisi
 8. entity_name: nombre de la tarjeta o cuenta emisora tal como figura en el documento (ej: "Naranja X", "Mastercard Banco Nación", "Mercado Pago"). holder_name: nombre completo del titular del documento. entity_kind: "card" SOLO si es un resumen de tarjeta de crédito (tiene fecha de cierre/vencimiento, pago mínimo, límite de compra, total a pagar). "wallet" si es un extracto de cuenta, caja de ahorro, billetera virtual o préstamo: señales como CVU/CBU, "Resumen de cuenta", "Saldo inicial / Saldo final", "Entradas / Salidas", columna "Saldo" tras cada movimiento, "Rendimientos". Mercado Pago, Ualá, Naranja X Billetera y similares con esas señales son "wallet", aunque la marca también tenga una tarjeta.
 
 Devolvé ÚNICAMENTE un JSON con esta forma:
-{"entity_name":"","entity_kind":"card","holder_name":"","period":"YYYY-MM","total_ars":null,"total_usd":null,"items":[{"date":"","description":"","amount":0,"currency":"ARS","operation_type":"purchase","direction":"out","category":"","installment_number":1,"total_installments":1}]}
+{"entity_name":"","entity_kind":"card","holder_name":"","period":"YYYY-MM","statement_close_date":null,"statement_due_date":null,"total_ars":null,"total_usd":null,"items":[{"date":"","description":"","amount":0,"currency":"ARS","operation_type":"purchase","direction":"out","category":"","installment_number":1,"total_installments":1}]}
 `;
 
 function toNumber(v: unknown): number | null {
@@ -110,6 +111,8 @@ function normalizeStatement(raw: any) {
     holder_name: String(raw.holder_name || '').slice(0, 80),
     entity_kind: raw.entity_kind === 'wallet' ? 'wallet' : raw.entity_kind === 'card' ? 'card' : '',
     period: /^\d{4}-\d{2}$/.test(String(raw.period)) ? String(raw.period) : '',
+    statement_close_date: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.statement_close_date)) ? String(raw.statement_close_date) : null,
+    statement_due_date: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.statement_due_date)) ? String(raw.statement_due_date) : null,
     total_ars: toNumber(raw.total_ars),
     total_usd: toNumber(raw.total_usd),
     items,

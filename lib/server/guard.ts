@@ -5,7 +5,8 @@ import { AccessState, computeAccess } from '../access';
 import { isAdminEmail } from '../access';
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-export const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash';
+// Opcional: otro modelo de Gemini como último intento (vacío = no se usa; un modelo retirado devuelve 404).
+export const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || '';
 export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // Vercel limita el body a ~4,5 MB
 
 export class ApiError extends Error {
@@ -238,7 +239,6 @@ async function callClaude(params: any): Promise<{ text: string }> {
     body: JSON.stringify({
       model: CLAUDE_MODEL,
       max_tokens: Math.min(Number(cfg.maxOutputTokens) || 8192, 16000),
-      temperature: typeof cfg.temperature === 'number' ? cfg.temperature : 0,
       messages: [{ role: 'user', content }],
     }),
     signal: AbortSignal.timeout(50000),

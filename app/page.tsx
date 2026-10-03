@@ -63,7 +63,8 @@ const COLORS = ['#FF8042', '#00C49F', '#0088FE', '#faad14', '#8884d8', '#ff4d4f'
 type Cur = 'ARS' | 'USD';
 
 // Los pagos de tarjeta son transferencias (no ingresos) y los reintegros restan gasto.
-const isTransfer = (t: any) => t.operation_type === 'payment';
+// Pagos de tarjeta y transferencias entre cuentas propias no son ingreso ni gasto.
+const isTransfer = (t: any) => t.operation_type === 'payment' || t.operation_type === 'transfer';
 const isRefund = (t: any) => t.operation_type === 'refund';
 // balance_ars pasó a ser el saldo; credit_limit solo es respaldo de datos viejos (?? y no ||, así un saldo 0 no muestra el límite)
 const cardBalanceArs = (c: any) => Number(c.balance_ars ?? c.credit_limit ?? 0);
@@ -142,7 +143,7 @@ export default function FinanzasDRMIA() {
   // 'linked' = asignados a esta tarjeta; 'unassigned' = sin tarjeta ni billetera (importes viejos); 'all' = todos
   const [movScope, setMovScope] = useState<'linked' | 'unassigned' | 'all'>('linked');
   const [editTxType, setEditTxType] = useState<'income' | 'expense'>('income');
-  const [editTxOpType, setEditTxOpType] = useState<'purchase' | 'payment' | 'refund'>('purchase');
+  const [editTxOpType, setEditTxOpType] = useState<'purchase' | 'payment' | 'refund' | 'income' | 'transfer'>('purchase');
   const [editTxCurrency, setEditTxCurrency] = useState<'ARS' | 'USD'>('ARS');
   const [editTxCategory, setEditTxCategory] = useState('Alimentos');
   const [editTxAmount, setEditTxAmount] = useState('');
@@ -878,6 +879,17 @@ export default function FinanzasDRMIA() {
     }
   }
 
+  function handleChangePreviewOp(index: number, op: string) {
+    if (!migrationData?.items) return;
+    const updated = [...migrationData.items];
+    const it = updated[index];
+    it.operation_type = op;
+    if (op === 'purchase') it.direction = 'out';
+    else if (op !== 'transfer') it.direction = 'in';
+    if (op === 'purchase' && (!it.selectedCategory || it.selectedCategory === 'Tarjeta de Crédito')) it.selectedCategory = 'Por Clasificar';
+    setMigrationData({ ...migrationData, items: updated });
+  }
+
   function handleUpdatePreviewCategory(index: number, newCategory: string) {
     if (!migrationData?.items) return;
     const updated = [...migrationData.items];
@@ -963,13 +975,16 @@ export default function FinanzasDRMIA() {
       }
 
       const rows = validItems.map((item: any) => {
-        const isOpRefund = item.operation_type === 'refund';
-        const isOpPayment = item.operation_type === 'payment';
-        const isIncomeType = isOpRefund || isOpPayment;
+        const op = item.operation_type || 'purchase';
+        const isOpRefund = op === 'refund';
+        const isOpPayment = op === 'payment';
+        const isIncomeType = op === 'transfer' ? item.direction === 'in' : op !== 'purchase';
 
-        const finalCategory = isIncomeType 
-          ? 'Tarjeta de Crédito' 
-          : (item.selectedCategory === 'Por Clasificar' ? 'Otros' : item.selectedCategory);
+        const finalCategory = op === 'purchase'
+          ? (item.selectedCategory === 'Por Clasificar' ? 'Otros' : item.selectedCategory)
+          : op === 'income' ? 'Ingreso'
+          : op === 'transfer' ? 'Transferencia propia'
+          : 'Tarjeta de Crédito';
 
         return {
           user_id: currentSessionUser.id,
@@ -978,10 +993,10 @@ export default function FinanzasDRMIA() {
             : item.description,
           amount: item.amount,
           currency: item.currency || 'ARS',
-          operation_type: item.operation_type || 'purchase',
+          operation_type: op,
           category: finalCategory,
           type: isIncomeType ? 'income' : 'expense',
-          income_source: isOpRefund ? 'reintegro' : isOpPayment ? 'pago_tarjeta' : null,
+          income_source: isOpRefund ? 'reintegro' : isOpPayment ? 'pago_tarjeta' : op === 'income' ? 'other' : null,
           credit_card_id: assignedCardId,
           loan_id: assignedLoanId,
           date: (item.date && item.date.length === 10) ? item.date : today,
@@ -2128,6 +2143,11 @@ export default function FinanzasDRMIA() {
                           Pago Tarjeta
                         </span>
                       )}
+                      {t.operation_type === 'transfer' && (
+                        <span className="bg-violet-100 text-violet-800 text-[10px] font-bold px-1.5 py-0.2 rounded">
+                          Transferencia propia
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
                       <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">📅 {t.date}</span>
@@ -2375,12 +2395,15 @@ export default function FinanzasDRMIA() {
                     const isDup = item.isDuplicate;
                     const isPayment = item.operation_type === 'payment';
                     const isRefund = item.operation_type === 'refund';
+                    const isIncomeOp = item.operation_type === 'income';
+                    const isOwnTransfer = item.operation_type === 'transfer';
+                    const isIn = isOwnTransfer ? item.direction === 'in' : item.operation_type !== 'purchase';
                     const isUsd = item.currency === 'USD';
 
                     return (
                       <div 
                         key={idx} 
-                        className={`p-3 rounded-xl border text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 ${isDup ? 'bg-slate-100 border-slate-200 opacity-60' : isRefund ? 'bg-emerald-50/60 border-emerald-200' : isPayment ? 'bg-blue-50/60 border-blue-200' : 'bg-white border-slate-200'}`}
+                        className={`p-3 rounded-xl border text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 ${isDup ? 'bg-slate-100 border-slate-200 opacity-60' : isRefund || isIncomeOp ? 'bg-emerald-50/60 border-emerald-200' : isPayment ? 'bg-blue-50/60 border-blue-200' : isOwnTransfer ? 'bg-violet-50/60 border-violet-200' : 'bg-white border-slate-200'}`}
                       >
                         <div className="space-y-0.5">
                           <div className="flex items-center gap-2">
@@ -2395,6 +2418,16 @@ export default function FinanzasDRMIA() {
                                 Pago Realizado
                               </span>
                             )}
+                            {isIncomeOp && (
+                              <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                                Ingreso
+                              </span>
+                            )}
+                            {isOwnTransfer && (
+                              <span className="bg-violet-100 text-violet-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                                Transferencia propia (no cuenta)
+                              </span>
+                            )}
                             {isDup && (
                               <span className="bg-slate-200 text-slate-700 text-[10px] font-semibold px-2 py-0.5 rounded">
                                 Ya registrado
@@ -2407,9 +2440,24 @@ export default function FinanzasDRMIA() {
                         </div>
 
                         <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-                          <span className={`font-bold ${isRefund || isPayment ? 'text-emerald-600' : 'text-slate-900'}`}>
-                            {isRefund || isPayment ? '+' : '-'}{formatMoney(item.amount, isUsd ? 'USD' : 'ARS')}
+                          <span className={`font-bold ${isIn ? 'text-emerald-600' : 'text-slate-900'}`}>
+                            {isIn ? '+' : '-'}{formatMoney(item.amount, isUsd ? 'USD' : 'ARS')}
                           </span>
+
+                          {!isDup && (
+                            <select
+                              value={item.operation_type}
+                              onChange={(e) => handleChangePreviewOp(idx, e.target.value)}
+                              title="Cambiar el tipo de movimiento"
+                              className="text-xs border border-slate-200 rounded-lg p-1.5 outline-none bg-white text-slate-700"
+                            >
+                              <option value="purchase">Gasto</option>
+                              <option value="income">Ingreso</option>
+                              <option value="transfer">Transferencia propia</option>
+                              <option value="payment">Pago de tarjeta</option>
+                              <option value="refund">Reintegro</option>
+                            </select>
+                          )}
 
                           {item.operation_type === 'purchase' && (
                             <select 
@@ -2538,7 +2586,7 @@ export default function FinanzasDRMIA() {
                 ) : rows.map(t => {
                   const biz = isBusinessDesc(t.description);
                   const isIn = t.type === 'income';
-                  const label = isTransfer(t) ? 'Pago de tarjeta' : isRefund(t) ? 'Reintegro' : null;
+                  const label = t.operation_type === 'transfer' ? 'Transferencia propia' : isTransfer(t) ? 'Pago de tarjeta' : isRefund(t) ? 'Reintegro' : null;
                   return (
                     <div key={t.id} className={`p-2.5 border rounded-xl flex items-center gap-2.5 text-xs ${biz ? 'bg-indigo-50/50 border-indigo-100' : 'bg-slate-50 border-slate-100'}`}>
                       <input
@@ -2770,13 +2818,15 @@ export default function FinanzasDRMIA() {
                   onChange={(e: any) => {
                     const op = e.target.value;
                     setEditTxOpType(op);
-                    setEditTxType(op === 'purchase' ? 'expense' : 'income');
+                    if (op !== 'transfer') setEditTxType(op === 'purchase' ? 'expense' : 'income');
                   }} 
                   className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white font-semibold"
                 >
                   <option value="purchase">Compra / Consumo (Gasto)</option>
                   <option value="payment">Pago de Tarjeta (Ingreso/Cancelación)</option>
                   <option value="refund">Reintegro / Nota de Crédito (Saldo a favor)</option>
+                  <option value="income">Ingreso real (rendimiento, cobro, transferencia de terceros)</option>
+                  <option value="transfer">Transferencia entre mis cuentas (no cuenta)</option>
                 </select>
               </div>
 

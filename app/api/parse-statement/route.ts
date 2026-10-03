@@ -22,19 +22,22 @@ Analizá este extracto bancario o resumen de tarjeta de crédito/billetera (ej: 
 Fecha de hoy: ${today}. Extraé TODOS los movimientos, distinguiendo con precisión:
 
 1. operation_type:
-   - "purchase": compras, cuotas, intereses, comisiones, impuestos.
-   - "payment": pagos del resumen anterior ("PAGO EN PESOS", "PAGO VENCIMIENTO EN DOLARES", "CANCELACION ANTICIPADA").
-   - "refund": reintegros, devoluciones, bonificaciones, notas de crédito, importes negativos.
+   - "purchase": compras, cuotas, intereses, comisiones, impuestos y dinero que SALE hacia terceros (pagos con QR, transferencias enviadas a otras personas o comercios).
+   - "payment": pagos del resumen de una tarjeta ("PAGO EN PESOS", "PAGO VENCIMIENTO EN DOLARES", "CANCELACION ANTICIPADA", "Pago de resumen Tarjeta ...", "Pago anticipado Tarjeta ...").
+   - "refund": reintegros, devoluciones, bonificaciones, notas de crédito, importes negativos en una tarjeta.
+   - "income": dinero que ENTRA como ingreso real: rendimientos o intereses ganados, transferencias recibidas de OTRAS personas, depósitos, cobros, sueldos.
+   - "transfer": transferencia entre cuentas PROPIAS del titular (enviada o recibida) cuando el nombre de la contraparte coincide con el del titular del documento. No es ingreso ni gasto.
 2. currency: "USD" si figura en columna U$S/USS o indica dólares; "ARS" si son pesos.
 3. total_ars / total_usd: saldo total adeudado del resumen en pesos y en dólares (negativo si está a favor). null si no figura.
 4. category: una de ${STATEMENT_CATEGORIES.map(c => `"${c}"`).join(', ')}. Si no podés determinar el comercio, escribí EXACTAMENTE "Por Clasificar".
 5. amount siempre como número positivo con punto decimal (el signo lo da operation_type).
 6. date en formato YYYY-MM-DD; si falta el año, deducilo del período del resumen.
 7. installment_number / total_installments: 1 y 1 si no es una compra en cuotas.
-8. entity_name: nombre de la tarjeta o cuenta emisora tal como figura en el documento (ej: "Naranja X", "Mastercard Banco Nación", "Mercado Pago"). entity_kind: "card" si es un resumen de tarjeta de crédito, "wallet" si es un extracto de cuenta, billetera o préstamo.
+7b. direction: "in" si el dinero entra a la cuenta (ingreso, crédito), "out" si sale (egreso, débito).
+8. entity_name: nombre de la tarjeta o cuenta emisora tal como figura en el documento (ej: "Naranja X", "Mastercard Banco Nación", "Mercado Pago"). holder_name: nombre completo del titular del documento. entity_kind: "card" si es un resumen de tarjeta de crédito, "wallet" si es un extracto de cuenta, billetera o préstamo.
 
 Devolvé ÚNICAMENTE un JSON con esta forma:
-{"entity_name":"","entity_kind":"card","period":"YYYY-MM","total_ars":null,"total_usd":null,"items":[{"date":"","description":"","amount":0,"currency":"ARS","operation_type":"purchase","category":"","installment_number":1,"total_installments":1}]}
+{"entity_name":"","entity_kind":"card","holder_name":"","period":"YYYY-MM","total_ars":null,"total_usd":null,"items":[{"date":"","description":"","amount":0,"currency":"ARS","operation_type":"purchase","direction":"out","category":"","installment_number":1,"total_installments":1}]}
 `;
 
 function toNumber(v: unknown): number | null {
@@ -47,7 +50,17 @@ function toNumber(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const fold = (v: string) => v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const tokens = (v: string) => fold(v).split(/[^a-z0-9]+/).filter(t => t.length > 1);
+
 function normalizeStatement(raw: any) {
+  const holder = tokens(String(raw?.holder_name || ''));
+  // Transferencia cuyo nombre de contraparte contiene al titular = cuenta propia
+  const isOwnTransfer = (desc: string) => {
+    if (holder.length < 2 || !/transfer/i.test(desc)) return false;
+    const d = tokens(desc);
+    return holder.filter(t => d.includes(t)).length >= Math.min(2, holder.length);
+  };
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) {
     throw new ApiError(502, 'La IA no encontró movimientos en el documento.');
   }
@@ -58,9 +71,14 @@ function normalizeStatement(raw: any) {
     .map((it: any) => {
       let amount = toNumber(it?.amount);
       if (amount === null || amount === 0) return null;
-      let op = ['purchase', 'payment', 'refund'].includes(it?.operation_type) ? it.operation_type : 'purchase';
+      let op = ['purchase', 'payment', 'refund', 'income', 'transfer'].includes(it?.operation_type) ? it.operation_type : 'purchase';
       if (amount < 0 && op === 'purchase') op = 'refund'; // importe negativo = crédito
       amount = Math.abs(amount);
+      const desc = String(it?.description || '');
+      if (isOwnTransfer(desc)) op = 'transfer';
+      else if (op === 'refund' && /transferencia recibida|rendimiento|dep[oó]sito|acreditaci/i.test(desc)) op = 'income';
+      let direction: 'in' | 'out' = it?.direction === 'in' ? 'in' : it?.direction === 'out' ? 'out' : (op === 'purchase' ? 'out' : 'in');
+      if (op === 'transfer' && it?.direction !== 'in' && it?.direction !== 'out') direction = /recib/i.test(desc) ? 'in' : 'out';
       const date = /^\d{4}-\d{2}-\d{2}$/.test(String(it?.date)) ? String(it.date) : '';
       const instN = Math.max(1, Math.round(toNumber(it?.installment_number) || 1));
       const instT = Math.max(instN, Math.round(toNumber(it?.total_installments) || 1));
@@ -70,6 +88,7 @@ function normalizeStatement(raw: any) {
         amount,
         currency: String(it?.currency).toUpperCase() === 'USD' ? 'USD' : 'ARS',
         operation_type: op,
+        direction,
         category: cats.has(it?.category) ? it.category : 'Por Clasificar',
         installment_number: instN,
         total_installments: instT,
@@ -83,6 +102,7 @@ function normalizeStatement(raw: any) {
 
   return {
     entity_name: String(raw.entity_name || '').slice(0, 80),
+    holder_name: String(raw.holder_name || '').slice(0, 80),
     entity_kind: raw.entity_kind === 'wallet' ? 'wallet' : raw.entity_kind === 'card' ? 'card' : '',
     period: /^\d{4}-\d{2}$/.test(String(raw.period)) ? String(raw.period) : '',
     total_ars: toNumber(raw.total_ars),

@@ -79,6 +79,11 @@ function normalizeStatement(raw: any) {
       else if (op === 'refund' && /transferencia recibida|rendimiento|dep[oó]sito|acreditaci/i.test(desc)) op = 'income';
       let direction: 'in' | 'out' = it?.direction === 'in' ? 'in' : it?.direction === 'out' ? 'out' : (op === 'purchase' ? 'out' : 'in');
       if (op === 'transfer' && it?.direction !== 'in' && it?.direction !== 'out') direction = /recib/i.test(desc) ? 'in' : 'out';
+      if (op === 'purchase') direction = 'out';
+      else if (op === 'refund' || op === 'income') direction = 'in';
+      // El pago de una tarjeta ENTRA al resumen de la tarjeta, pero SALE de la billetera/cuenta desde donde se pagó.
+      else if (op === 'payment' && raw.entity_kind === 'wallet') direction = 'out';
+      else if (op === 'payment' && raw.entity_kind === 'card') direction = 'in';
       const date = /^\d{4}-\d{2}-\d{2}$/.test(String(it?.date)) ? String(it.date) : '';
       const instN = Math.max(1, Math.round(toNumber(it?.installment_number) || 1));
       const instT = Math.max(instN, Math.round(toNumber(it?.total_installments) || 1));

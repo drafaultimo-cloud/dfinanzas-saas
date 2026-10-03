@@ -87,6 +87,12 @@ function guessEntity(name: string, kind: string, cards: any[], loans: any[]): st
   if (scored.length > 1 && scored[0].score === scored[1].score) return '';
   return scored[0].key;
 }
+// ¿El dinero entra (+) o sale (-)? El pago de una tarjeta entra en la tarjeta pero sale de la billetera.
+const isInflow = (item: any) =>
+  item.operation_type === 'purchase' ? false
+  : item.operation_type === 'refund' || item.operation_type === 'income' ? true
+  : item.direction ? item.direction === 'in'
+  : item.operation_type === 'payment';
 // Un movimiento es del Negocio si su descripción empieza con "[NEGOCIO]".
 const BUSINESS_TAG = '[NEGOCIO]';
 const isBusinessDesc = (d?: string | null) => (d || '').startsWith(BUSINESS_TAG);
@@ -862,6 +868,7 @@ export default function FinanzasDRMIA() {
             date: itemDate,
             amount: cleanAmount,
             isDuplicate,
+            direction: item.operation_type === 'payment' && (data.entity_kind === 'wallet' || targetEntityForImport?.type === 'loan') ? 'out' : item.direction,
             selectedCategory: item.category || (item.operation_type === 'refund' ? 'Otros' : 'Por Clasificar')
           };
         });
@@ -884,7 +891,9 @@ export default function FinanzasDRMIA() {
     const updated = [...migrationData.items];
     const it = updated[index];
     it.operation_type = op;
+    const isWalletImport = migrationData.entity_kind === 'wallet' || targetEntityForImport?.type === 'loan';
     if (op === 'purchase') it.direction = 'out';
+    else if (op === 'payment') it.direction = isWalletImport ? 'out' : 'in';
     else if (op !== 'transfer') it.direction = 'in';
     if (op === 'purchase' && (!it.selectedCategory || it.selectedCategory === 'Tarjeta de Crédito')) it.selectedCategory = 'Por Clasificar';
     setMigrationData({ ...migrationData, items: updated });
@@ -978,7 +987,7 @@ export default function FinanzasDRMIA() {
         const op = item.operation_type || 'purchase';
         const isOpRefund = op === 'refund';
         const isOpPayment = op === 'payment';
-        const isIncomeType = op === 'transfer' ? item.direction === 'in' : op !== 'purchase';
+        const isIncomeType = isInflow(item);
 
         const finalCategory = op === 'purchase'
           ? (item.selectedCategory === 'Por Clasificar' ? 'Otros' : item.selectedCategory)
@@ -2397,7 +2406,7 @@ export default function FinanzasDRMIA() {
                     const isRefund = item.operation_type === 'refund';
                     const isIncomeOp = item.operation_type === 'income';
                     const isOwnTransfer = item.operation_type === 'transfer';
-                    const isIn = isOwnTransfer ? item.direction === 'in' : item.operation_type !== 'purchase';
+                    const isIn = isInflow(item);
                     const isUsd = item.currency === 'USD';
 
                     return (

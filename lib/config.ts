@@ -9,6 +9,20 @@ export const PAID_DAYS = 30; // vigencia de cada pago mensual
 
 export type PlanId = 'base' | 'pro';
 
+// Tope mensual de usos de IA por usuario (cada uso le cuesta plata al servicio). Se controla en el servidor.
+// 'trial' = prueba gratis; 'paid' = plan Pro pago. El admin no tiene tope.
+export type QuotaKind = 'parse' | 'scan' | 'audit' | 'pay';
+export const AI_MONTHLY_LIMITS: Record<'trial' | 'paid', Record<QuotaKind, number>> = {
+  trial: { parse: 8, scan: 10, audit: 3, pay: 12 },
+  paid: { parse: 40, scan: 60, audit: 15, pay: 12 },
+};
+export const QUOTA_LABEL: Record<QuotaKind, string> = {
+  parse: 'importaciones de extractos con IA',
+  scan: 'escaneos de tickets',
+  audit: 'diagnósticos con IA',
+  pay: 'envíos de comprobantes de pago',
+};
+
 export const PLAN_ESENCIAL_REGULAR = 12000;
 export const PLAN_ESENCIAL_PROMO = 7200;
 export const PLAN_PRO_REGULAR = 24500;
@@ -41,4 +55,4 @@ export function todayLocal(d: Date = new Date()): string {
 }
 
 // Se muestra al pie de la app: sirve para comprobar qué versión está corriendo en el celular.
-export const APP_VERSION = '2026.10.03-j';
+export const APP_VERSION = '2026.10.03-k';

@@ -14,6 +14,10 @@ import {
 } from '@/lib/config';
 import { AccessState, computeAccess, isAdminEmail } from '@/lib/access';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import PlanningHub from '@/components/planning/PlanningHub';
+import AlertsStrip from '@/components/planning/AlertsStrip';
+import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
+import { applyRules, computeNetWorth } from '@/lib/planning';
 import { 
   Sparkles, 
   CreditCard, 
@@ -160,6 +164,16 @@ export default function FinanzasDRMIA() {
   const [profileType, setProfileType] = useState<'personal' | 'business'>('personal');
   const [currencyMode, setCurrencyMode] = useState<'ARS' | 'USD'>('ARS');
   const [usdRate, setUsdRate] = useState<number>(DEFAULT_USD_RATE);
+  // Cotización: 'manual' o una fuente automática (oficial, mep, ccl, blue)
+  const [usdSource, setUsdSource] = useState<string>('manual');
+  const [usdUpdatedAt, setUsdUpdatedAt] = useState<string>('');
+  // Planificación
+  const [section, setSection] = useState<'resumen' | 'planificacion'>('resumen');
+  const [viewingOwner, setViewingOwner] = useState<{ id: string; email: string } | null>(null);
+  const viewingRef = useRef<{ id: string; email: string } | null>(null);
+  const [categoryRules, setCategoryRules] = useState<any[]>([]);
+  const planningJobsDone = useRef<string | null>(null);
+  const lastSnapshot = useRef<string>('');
 
   // Datos financieros
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -274,14 +288,36 @@ export default function FinanzasDRMIA() {
       const saved = parseFloat(localStorage.getItem('drmia_usd_rate') || '');
       // eslint-disable-next-line react-hooks/set-state-in-effect
       if (saved > 0) setUsdRate(saved);
+      const src = localStorage.getItem('drmia_usd_source');
+      if (src && src !== 'manual') setTimeout(() => applyUsdSource(src), 0);
     } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function updateUsdRate(v: string) {
     const n = parseFloat(v);
     if (n > 0) {
       setUsdRate(n);
-      try { localStorage.setItem('drmia_usd_rate', String(n)); } catch {}
+      setUsdSource('manual');
+      try { localStorage.setItem('drmia_usd_rate', String(n)); localStorage.setItem('drmia_usd_source', 'manual'); } catch {}
+    }
+  }
+
+  // Trae la cotización automática (oficial, MEP, CCL o blue) desde el servidor.
+  async function applyUsdSource(source: string) {
+    setUsdSource(source);
+    try { localStorage.setItem('drmia_usd_source', source); } catch {}
+    if (source === 'manual') return;
+    try {
+      const res = await fetch('/api/dolar');
+      const data = await res.json();
+      const v = Number(data?.rates?.[source]);
+      if (!res.ok || !(v > 0)) throw new Error(data?.error || 'Sin dato para esa cotización');
+      setUsdRate(v);
+      setUsdUpdatedAt(data.updatedAt ? new Date(data.updatedAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) : '');
+    } catch (e: any) {
+      alert('No pude traer la cotización: ' + e.message + '. Se mantiene la última cargada.');
+      setUsdSource('manual');
     }
   }
 
@@ -543,7 +579,14 @@ export default function FinanzasDRMIA() {
     }
   }
 
-  async function refreshAll(userId: string) {
+  async function refreshAll(ownId: string) {
+    // Si estás viendo los datos compartidos de otra persona, siempre se recarga lo de esa persona.
+    const userId = viewingRef.current?.id || ownId;
+    if (!viewingRef.current) {
+      supabase.from('category_rules').select('*').eq('user_id', ownId).then(({ data, error }) => {
+        if (!error && data) setCategoryRules(data);
+      });
+    }
     const [txRes, cardsRes, loansRes] = await Promise.all([
       supabase.from('transactions').select('*').eq('user_id', userId).order('date', { ascending: false }),
       supabase.from('credit_cards').select('*').eq('user_id', userId),
@@ -568,6 +611,31 @@ export default function FinanzasDRMIA() {
     if (cardsRes.data) setCreditCards(cardsRes.data);
     if (loansRes.data) setLoans(loansRes.data);
   }
+
+  // Cambia entre mis datos y los datos que otra persona compartió conmigo (solo lectura).
+  function switchViewOwner(owner: { id: string; email: string } | null) {
+    viewingRef.current = owner;
+    setViewingOwner(owner);
+    monthInitialized.current = false;
+    setSelectedMonth('all');
+    if (user) refreshAll(user.id);
+  }
+
+  // Tareas automáticas al abrir la app: cargar recurrentes vencidos y guardar la foto mensual del patrimonio.
+  useEffect(() => {
+    if (!user || viewingOwner || loading) return;
+    if (planningJobsDone.current !== user.id) {
+      planningJobsDone.current = user.id;
+      generateDueRecurring(supabase, user.id).then(n => { if (n > 0) refreshAll(user.id); }).catch(() => {});
+    }
+    if (creditCards.length === 0 && loans.length === 0) return;
+    const nw = computeNetWorth(creditCards, loans, usdRate);
+    const key = `${nw.assets}|${nw.liabilities}`;
+    if (key === lastSnapshot.current) return;
+    lastSnapshot.current = key;
+    saveNetWorthSnapshot(supabase, user.id, creditCards, loans, usdRate).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, viewingOwner, loading, creditCards, loans, usdRate]);
 
   useEffect(() => {
     // Importante: NO hacer await de consultas de Supabase dentro de este callback
@@ -943,7 +1011,7 @@ export default function FinanzasDRMIA() {
             amount: cleanAmount,
             isDuplicate,
             direction: item.operation_type === 'payment' && (data.entity_kind === 'wallet' || targetEntityForImport?.type === 'loan') ? 'out' : item.direction,
-            selectedCategory: item.category || (item.operation_type === 'refund' ? 'Otros' : 'Por Clasificar')
+            selectedCategory: (item.operation_type === 'purchase' && applyRules(item.description || '', categoryRules)) || item.category || (item.operation_type === 'refund' ? 'Otros' : 'Por Clasificar')
           };
         });
       }
@@ -1803,6 +1871,18 @@ export default function FinanzasDRMIA() {
                 onBlur={e => updateUsdRate(e.target.value)}
                 className="w-16 bg-transparent text-xs font-bold text-slate-700 outline-none"
               />
+              <select
+                value={usdSource}
+                onChange={e => applyUsdSource(e.target.value)}
+                title={usdUpdatedAt ? `Actualizado ${usdUpdatedAt}` : 'Elegí de dónde sale la cotización'}
+                className="bg-transparent text-[10px] font-bold text-indigo-700 outline-none cursor-pointer"
+              >
+                <option value="manual">Manual</option>
+                <option value="oficial">Oficial</option>
+                <option value="mep">MEP</option>
+                <option value="ccl">CCL</option>
+                <option value="blue">Blue</option>
+              </select>
             </label>
 
             <button 
@@ -1861,6 +1941,65 @@ export default function FinanzasDRMIA() {
             <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {dataError}
             <button onClick={() => user && refreshAll(user.id)} className="ml-auto underline font-semibold cursor-pointer">Reintentar</button>
           </div>
+        )}
+
+        {viewingOwner && (
+          <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs rounded-xl p-3 flex items-center gap-2">
+            <Eye className="w-4 h-4 flex-shrink-0" />
+            <span>Estás viendo los datos de <strong>{viewingOwner.email}</strong> en modo solo lectura. No podés modificar nada.</span>
+            <button onClick={() => switchViewOwner(null)} className="ml-auto underline font-semibold cursor-pointer">Volver a mis datos</button>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => setSection('resumen')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer border ${section === 'resumen' ? 'bg-[#0B192C] text-[#00D7FF] border-[#0B192C]' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+          >
+            Resumen
+          </button>
+          <button
+            onClick={() => setSection('planificacion')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer border ${section === 'planificacion' ? 'bg-[#0B192C] text-[#00D7FF] border-[#0B192C]' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+          >
+            Planificación y reportes
+          </button>
+        </div>
+
+        {section === 'planificacion' ? (
+          user && (
+            <PlanningHub
+              supabase={supabase}
+              userId={viewingOwner?.id || user.id}
+              ownUserId={user.id}
+              ownEmail={user.email || ''}
+              readOnly={!!viewingOwner}
+              viewingOwnerId={viewingOwner?.id || null}
+              onViewOwner={switchViewOwner}
+              transactions={transactions}
+              creditCards={creditCards}
+              loans={loans}
+              profile={profileType}
+              usdRate={usdRate}
+              onChanged={() => refreshAll(user.id)}
+            />
+          )
+        ) : (
+        <div className={viewingOwner ? 'pointer-events-none select-text space-y-6' : 'space-y-6'}>
+        {user && (
+          <AlertsStrip
+            supabase={supabase}
+            userId={viewingOwner?.id || user.id}
+            ownUserId={user.id}
+            readOnly={!!viewingOwner}
+            transactions={transactions}
+            creditCards={creditCards}
+            loans={loans}
+            profile={profileType}
+            usdRate={usdRate}
+            onChanged={() => {}}
+            onOpen={() => setSection('planificacion')}
+          />
         )}
 
         {/* Auditor IA */}
@@ -2503,6 +2642,8 @@ export default function FinanzasDRMIA() {
             })}
           </div>
         </div>
+        </div>
+        )}
 
       </div>
 

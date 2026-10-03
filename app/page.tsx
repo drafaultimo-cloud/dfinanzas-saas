@@ -76,7 +76,7 @@ function guessEntity(name: string, kind: string, cards: any[], loans: any[]): st
   const want = nameTokens(name);
   if (want.length === 0) return '';
   const pool = (kind === 'wallet'
-    ? loans.map(l => ({ key: `loan:${l.id}`, name: l.entity }))
+    ? loans.filter(l => loanKind(l) !== 'loan').map(l => ({ key: `loan:${l.id}`, name: l.entity }))
     : cards.map(c => ({ key: `card:${c.id}`, name: c.name })));
   const scored = pool
     .map(e => ({ key: e.key, score: nameTokens(e.name).filter(t => want.includes(t)).length }))
@@ -93,6 +93,9 @@ const isInflow = (item: any) =>
   : item.operation_type === 'refund' || item.operation_type === 'income' ? true
   : item.direction ? item.direction === 'in'
   : item.operation_type === 'payment';
+// Tipo de ítem de la tabla loans: 'wallet' (billetera/caja de ahorro), 'cash' (efectivo) o 'loan' (préstamo/hipotecario).
+const loanKind = (l: any): 'wallet' | 'cash' | 'loan' =>
+  l?.kind === 'wallet' || l?.kind === 'cash' || l?.kind === 'loan' ? l.kind : (l?.balance_ars !== null && l?.balance_ars !== undefined ? 'wallet' : 'loan');
 // Cuenta de origen/destino de una transferencia: 'card:<id>' | 'loan:<id>'.
 const accountKeyOf = (t: any) => t.credit_card_id ? `card:${t.credit_card_id}` : t.loan_id ? `loan:${t.loan_id}` : '';
 // Intenta deducir con qué otra cuenta se movió la plata: por nombre en la descripción o por un movimiento
@@ -236,6 +239,12 @@ export default function FinanzasDRMIA() {
   const [newLoanEntity, setNewLoanEntity] = useState('');
   const [newLoanTotal, setNewLoanTotal] = useState('');
   const [newLoanInstallment, setNewLoanInstallment] = useState('');
+  const [newLoanKind, setNewLoanKind] = useState<'wallet' | 'cash' | 'loan'>('wallet');
+  const [newLoanBalance, setNewLoanBalance] = useState('');
+  const [newLoanBalanceUsd, setNewLoanBalanceUsd] = useState('');
+  const [newLoanInstTotal, setNewLoanInstTotal] = useState('');
+  const [newLoanInstPaid, setNewLoanInstPaid] = useState('');
+  const [newLoanDueDay, setNewLoanDueDay] = useState('10');
 
   // Comprobantes
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
@@ -736,30 +745,42 @@ export default function FinanzasDRMIA() {
     refreshAll(user.id);
   }
 
+  function openLoanModal(kind: 'wallet' | 'cash' | 'loan') {
+    setNewLoanKind(kind);
+    setNewLoanEntity(kind === 'cash' ? 'Efectivo' : '');
+    setNewLoanTotal(''); setNewLoanInstallment(''); setNewLoanBalance(''); setNewLoanBalanceUsd('');
+    setNewLoanInstTotal(''); setNewLoanInstPaid(''); setNewLoanDueDay('10');
+    setIsLoanModalOpen(true);
+  }
+
   async function handleCreateLoan(e: React.FormEvent) {
     e.preventDefault();
     if (!newLoanEntity || !user) return;
 
+    const isLoan = newLoanKind === 'loan';
+    const instTotal = Math.max(1, parseInt(newLoanInstTotal || '1', 10) || 1);
+    const instPaid = Math.min(instTotal, Math.max(0, parseInt(newLoanInstPaid || '0', 10) || 0));
     const { error } = await supabase.from('loans').insert([{
       user_id: user.id,
       entity: newLoanEntity,
-      total_amount: parseFloat(newLoanTotal || '0'),
-      installment_amount: parseFloat(newLoanInstallment || '0'),
-      total_installments: 12,
-      paid_installments: 1,
-      due_day: 10
+      kind: newLoanKind,
+      total_amount: isLoan ? parseFloat(newLoanTotal || '0') : 0,
+      installment_amount: isLoan ? parseFloat(newLoanInstallment || '0') : 0,
+      total_installments: isLoan ? instTotal : 1,
+      paid_installments: isLoan ? instPaid : 1,
+      due_day: isLoan ? Math.min(31, Math.max(1, parseInt(newLoanDueDay || '10', 10) || 10)) : 10,
+      ...(isLoan ? {} : {
+        balance_ars: parseFloat(newLoanBalance || '0'),
+        balance_usd: newLoanKind === 'wallet' && newLoanBalanceUsd ? parseFloat(newLoanBalanceUsd) : null,
+      }),
     }]);
 
     if (error) {
-      alert('No se pudo guardar: ' + error.message);
+      alert('No se pudo guardar (¿corriste la migración 007?): ' + error.message);
       return;
     }
-    setNewLoanEntity('');
-    setNewLoanTotal('');
-    setNewLoanInstallment('');
     setIsLoanModalOpen(false);
     refreshAll(user.id);
-    alert('¡Entidad/Billetera agregada correctamente!');
   }
 
   function openEditCard(card: any) {
@@ -770,6 +791,28 @@ export default function FinanzasDRMIA() {
     setEditCardLimitArs(String(cardBalanceArs(card)));
     setEditCardLimitUsd(String(card.balance_usd || '0'));
     setIsEditCardModalOpen(true);
+  }
+
+  // Ajuste manual del dinero disponible (útil para efectivo).
+  async function adjustLoanBalance(l: any) {
+    if (!user) return;
+    const raw = window.prompt(`Dinero disponible en "${l.entity}" ($):`, String(Number(l.balance_ars || 0)));
+    if (raw === null) return;
+    const val = parseFloat(raw.replace(/\./g, '').replace(',', '.'));
+    if (!Number.isFinite(val)) { alert('Número inválido.'); return; }
+    const { error } = await supabase.from('loans').update({ balance_ars: val }).eq('id', l.id).eq('user_id', user.id);
+    if (error) { alert('No se pudo guardar: ' + error.message); return; }
+    refreshAll(user.id);
+  }
+
+  // Reclasifica un ítem (por ejemplo, una billetera que quedó cargada como préstamo).
+  async function changeLoanKind(l: any, kind: 'wallet' | 'cash' | 'loan') {
+    if (!user) return;
+    const patch: Record<string, any> = { kind };
+    if (kind !== 'loan' && (l.balance_ars === null || l.balance_ars === undefined)) patch.balance_ars = 0;
+    const { error } = await supabase.from('loans').update(patch).eq('id', l.id).eq('user_id', user.id);
+    if (error) { alert('No se pudo cambiar (¿corriste la migración 007?): ' + error.message); return; }
+    refreshAll(user.id);
   }
 
   async function handleUpdateCard(e: React.FormEvent) {
@@ -952,7 +995,7 @@ export default function FinanzasDRMIA() {
   // Opciones de cuenta para elegir origen/destino de una transferencia (excluye la propia).
   const counterpartOptions = (selfKey: string) => [
     ...creditCards.map(c => ({ key: `card:${c.id}`, label: `Tarjeta: ${c.name}` })),
-    ...loans.map(l => ({ key: `loan:${l.id}`, label: `Cuenta/Billetera: ${l.entity}` })),
+    ...loans.map(l => ({ key: `loan:${l.id}`, label: `${loanKind(l) === 'loan' ? 'Préstamo' : loanKind(l) === 'cash' ? 'Efectivo' : 'Billetera'}: ${l.entity}` })),
   ].filter(o => o.key !== selfKey);
   const accountName = (key?: string | null) => {
     if (!key) return '';
@@ -966,7 +1009,7 @@ export default function FinanzasDRMIA() {
     if (!confirm(`¿Convertir "${card.name}" en billetera/cuenta? Sus movimientos pasan a la billetera y el saldo ($ ${Number(card.balance_ars || 0).toLocaleString('es-AR')}) se toma como dinero disponible.`)) return;
     try {
       const { data: created, error } = await supabase.from('loans').insert([{
-        user_id: user.id, entity: card.name, total_amount: 0, installment_amount: 0,
+        user_id: user.id, entity: card.name, kind: 'wallet', total_amount: 0, installment_amount: 0,
         total_installments: 1, paid_installments: 1, due_day: 10,
         balance_ars: Number(card.balance_ars || 0), balance_usd: Number(card.balance_usd || 0),
       }]).select('id').single();
@@ -1037,6 +1080,7 @@ export default function FinanzasDRMIA() {
             .insert([{
               user_id: currentSessionUser.id,
               entity: migrationData.entity_name || 'Billetera importada',
+              kind: 'wallet',
               total_amount: 0,
               installment_amount: 0,
               total_installments: 1,
@@ -1243,6 +1287,15 @@ export default function FinanzasDRMIA() {
   }, [filteredTransactions, purchaseTransactions, sumMode]);
 
   const netBalance = totalIncome - totalExpense;
+
+  // Billeteras (digitales), efectivo y préstamos
+  const walletsList = useMemo(() => loans.filter(l => loanKind(l) !== 'loan'), [loans]);
+  const loansList = useMemo(() => loans.filter(l => loanKind(l) === 'loan'), [loans]);
+  const digitalAvailableArs = useMemo(() => loans.filter(l => loanKind(l) === 'wallet').reduce((a, l) => a + Number(l.balance_ars || 0), 0), [loans]);
+  const digitalAvailableUsd = useMemo(() => loans.filter(l => loanKind(l) === 'wallet').reduce((a, l) => a + Number(l.balance_usd || 0), 0), [loans]);
+  const cashAvailableArs = useMemo(() => loans.filter(l => loanKind(l) === 'cash').reduce((a, l) => a + Number(l.balance_ars || 0), 0), [loans]);
+  const loansDebtArs = useMemo(() => loansList.reduce((a, l) => a + Math.max(0, Number(l.total_amount || 0)), 0), [loansList]);
+  const loansMonthlyArs = useMemo(() => loansList.reduce((a, l) => a + Number(l.installment_amount || 0), 0), [loansList]);
 
   // Deuda de tarjetas: ARS y USD por separado para mostrar, y consolidada para los KPIs.
   const totalDebtArs = useMemo(() => {
@@ -2011,27 +2064,42 @@ export default function FinanzasDRMIA() {
             )}
           </div>
 
-          {/* Billeteras Digitales y Préstamos */}
+          {/* Billeteras físicas y digitales */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <Landmark className="w-4 h-4 text-amber-600" />
-                <h3 className="text-sm font-bold text-slate-900">Préstamos & Billeteras Digitales</h3>
+            <div className="flex justify-between items-start gap-2">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Landmark className="w-4 h-4 text-amber-600" />
+                  <h3 className="text-sm font-bold text-slate-900">Billeteras: físicas y digitales</h3>
+                </div>
+                <p className="text-[11px] font-bold text-emerald-700">
+                  Disponible digital: {formatMoney(digitalAvailableArs, 'ARS')}
+                  {digitalAvailableUsd !== 0 && <span> · {formatMoney(digitalAvailableUsd, 'USD')}</span>}
+                </p>
+                <p className="text-[11px] font-bold text-slate-600">Efectivo: {formatMoney(cashAvailableArs, 'ARS')}</p>
               </div>
-              <button 
-                onClick={() => setIsLoanModalOpen(true)}
-                className="text-[11px] text-amber-700 hover:underline flex items-center gap-1 font-semibold cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" /> Agregar Billetera / Préstamo
-              </button>
+              <div className="flex flex-col items-end gap-1">
+                <button
+                  onClick={() => openLoanModal('wallet')}
+                  className="text-[11px] text-amber-700 hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Agregar Billetera / Cuenta
+                </button>
+                <button
+                  onClick={() => openLoanModal('cash')}
+                  className="text-[11px] text-slate-600 hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Agregar Efectivo
+                </button>
+              </div>
             </div>
 
-            {loans.length === 0 ? (
+            {walletsList.length === 0 ? (
               <div className="p-4 bg-amber-50/50 border border-dashed border-amber-200 rounded-2xl text-center space-y-2">
-                <p className="text-xs text-amber-800">No registras billeteras o préstamos activos.</p>
+                <p className="text-xs text-amber-800">Todavía no cargaste billeteras, cajas de ahorro ni efectivo.</p>
                 <div className="flex flex-wrap justify-center gap-2 pt-1">
                   <button
-                    onClick={() => setIsLoanModalOpen(true)}
+                    onClick={() => openLoanModal('wallet')}
                     className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 text-xs font-semibold rounded-xl hover:bg-amber-100/50 transition-colors cursor-pointer"
                   >
                     + Cargar Billetera Manual
@@ -2046,30 +2114,26 @@ export default function FinanzasDRMIA() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-2.5">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {loans.map(l => (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {walletsList.map(l => {
+                  const isCash = loanKind(l) === 'cash';
+                  return (
                     <div key={l.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-2 flex flex-col justify-between">
                       <div>
                         <div className="flex justify-between items-start">
-                          <p className="text-xs font-bold text-slate-800 pr-4">{l.entity}</p>
+                          <p className="text-xs font-bold text-slate-800 pr-4">
+                            {isCash && <span className="mr-1">💵</span>}{l.entity}
+                          </p>
                           <button onClick={() => handleDeleteLoan(l.id)} className="p-1 text-slate-400 hover:text-red-500 rounded">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        {l.installment_amount > 0 && (
-                          <p className="text-[10px] text-slate-500 mt-0.5">Cuota: {formatMoney(Number(l.installment_amount))}</p>
-                        )}
-                        {l.balance_ars !== null && l.balance_ars !== undefined ? (
-                          <div className="mt-0.5 space-y-0.5">
-                            <p className="text-[11px] font-bold text-emerald-700">Saldo en cuenta: {formatMoney(Number(l.balance_ars), 'ARS')}</p>
-                            {l.balance_usd !== null && l.balance_usd !== undefined && Number(l.balance_usd) !== 0 && (
-                              <p className="text-[11px] font-bold text-emerald-700">Saldo USD: {formatMoney(Number(l.balance_usd), 'USD')}</p>
-                            )}
-                          </div>
-                        ) : (
-                          <p className="text-[10px] text-amber-600 font-semibold mt-0.5">Total: {formatMoney(Number(l.total_amount))}</p>
-                        )}
+                        <div className="mt-0.5 space-y-0.5">
+                          <p className="text-[11px] font-bold text-emerald-700">{isCash ? 'Efectivo' : 'Saldo en cuenta'}: {formatMoney(Number(l.balance_ars || 0), 'ARS')}</p>
+                          {l.balance_usd !== null && l.balance_usd !== undefined && Number(l.balance_usd) !== 0 && (
+                            <p className="text-[11px] font-bold text-emerald-700">Saldo USD: {formatMoney(Number(l.balance_usd), 'USD')}</p>
+                          )}
+                        </div>
                       </div>
 
                       <button
@@ -2079,16 +2143,90 @@ export default function FinanzasDRMIA() {
                         <ListFilter className="w-3 h-3" />
                         Ver movimientos / pasar a Negocio
                       </button>
+                      {isCash ? (
+                        <button
+                          onClick={() => adjustLoanBalance(l)}
+                          className="w-full mt-2 py-1.5 px-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[10px] font-bold rounded-lg cursor-pointer"
+                        >
+                          Ajustar efectivo disponible
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => openImportForEntity('loan', l.id, l.entity)}
+                          className="w-full mt-2 py-1.5 px-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <FileUp className="w-3 h-3 text-amber-600" />
+                          Importar Movimientos del Mes
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Préstamos y créditos hipotecarios */}
+          <div className="md:col-span-2 bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+            <div className="flex justify-between items-start gap-2">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Landmark className="w-4 h-4 text-rose-600" />
+                  <h3 className="text-sm font-bold text-slate-900">Préstamos y créditos hipotecarios</h3>
+                </div>
+                {loansList.length > 0 && (
+                  <p className="text-[11px] font-bold text-rose-700">
+                    Deuda total: {formatMoney(loansDebtArs, 'ARS')} · Cuotas del mes: {formatMoney(loansMonthlyArs, 'ARS')}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => openLoanModal('loan')}
+                className="text-[11px] text-rose-700 hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" /> Agregar Préstamo / Hipotecario
+              </button>
+            </div>
+
+            {loansList.length === 0 ? (
+              <p className="text-xs text-slate-400">No registrás préstamos ni créditos hipotecarios.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {loansList.map(l => {
+                  const remaining = Math.max(0, Number(l.total_installments || 0) - Number(l.paid_installments || 0));
+                  return (
+                    <div key={l.id} className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1.5 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-start">
+                          <p className="text-xs font-bold text-slate-800 pr-4">{l.entity}</p>
+                          <button onClick={() => handleDeleteLoan(l.id)} className="p-1 text-slate-400 hover:text-red-500 rounded">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-[11px] font-bold text-rose-700 mt-0.5">Saldo deudor: {formatMoney(Number(l.total_amount || 0), 'ARS')}</p>
+                        {Number(l.installment_amount) > 0 && (
+                          <p className="text-[10px] text-slate-500">Cuota: {formatMoney(Number(l.installment_amount), 'ARS')} · vence el día {l.due_day}</p>
+                        )}
+                        {Number(l.total_installments) > 1 && (
+                          <p className="text-[10px] text-slate-500">Cuotas pagas: {l.paid_installments} de {l.total_installments} (faltan {remaining})</p>
+                        )}
+                      </div>
                       <button
-                        onClick={() => openImportForEntity('loan', l.id, l.entity)}
-                        className="w-full mt-2 py-1.5 px-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                        onClick={() => openMovements('loan', l.id, l.entity)}
+                        className="w-full py-1.5 px-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
                       >
-                        <FileUp className="w-3 h-3 text-amber-600" />
-                        Importar Movimientos del Mes
+                        <ListFilter className="w-3 h-3" />
+                        Ver movimientos / pasar a Negocio
+                      </button>
+                      <button
+                        onClick={() => changeLoanKind(l, 'wallet')}
+                        className="text-[10px] text-slate-400 hover:text-amber-700 hover:underline cursor-pointer text-left"
+                      >
+                        Esto es una billetera, no un préstamo
                       </button>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2442,50 +2580,72 @@ export default function FinanzasDRMIA() {
         </div>
       )}
 
-      {/* MODAL: AGREGAR BILLETERA / PRÉSTAMO */}
+      {/* MODAL: AGREGAR BILLETERA / EFECTIVO / PRÉSTAMO */}
       {isLoanModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-xl space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-900">Nueva Billetera o Préstamo</h3>
+              <h3 className="text-sm font-bold text-slate-900">
+                {newLoanKind === 'loan' ? 'Nuevo Préstamo / Hipotecario' : newLoanKind === 'cash' ? 'Nuevo Efectivo' : 'Nueva Billetera o Cuenta'}
+              </h3>
               <button onClick={() => setIsLoanModalOpen(false)}><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleCreateLoan} className="space-y-3">
               <div>
-                <label className="text-xs text-slate-500">Nombre de la Entidad / Billetera</label>
-                <input 
-                  type="text" 
-                  value={newLoanEntity} 
-                  onChange={e => setNewLoanEntity(e.target.value)} 
-                  placeholder="Ej: Mercado Pago, Naranja X Cuenta, Ualá" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-semibold" 
-                  required 
+                <label className="text-xs text-slate-500">
+                  {newLoanKind === 'loan' ? 'Nombre (ej: Hipotecario Banco Nación, Préstamo personal)' : newLoanKind === 'cash' ? 'Nombre' : 'Nombre de la billetera / cuenta'}
+                </label>
+                <input
+                  type="text"
+                  value={newLoanEntity}
+                  onChange={e => setNewLoanEntity(e.target.value)}
+                  placeholder={newLoanKind === 'loan' ? 'Ej: Hipotecario Banco Nación' : newLoanKind === 'cash' ? 'Efectivo' : 'Ej: Mercado Pago, Naranja X, Ualá'}
+                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none font-semibold"
+                  required
                 />
               </div>
-              <div>
-                <label className="text-xs text-slate-500">Saldo Deudor o Total Préstamo ($)</label>
-                <input 
-                  type="number" 
-                  step="0.01" 
-                  value={newLoanTotal} 
-                  onChange={e => setNewLoanTotal(e.target.value)} 
-                  placeholder="0.00 (si es billetera puedes dejar en 0)" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" 
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-500">Monto Cuota Mensual ($ - opcional)</label>
-                <input 
-                  type="number" 
-                  step="0.01" 
-                  value={newLoanInstallment} 
-                  onChange={e => setNewLoanInstallment(e.target.value)} 
-                  placeholder="0.00" 
-                  className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" 
-                />
-              </div>
+
+              {newLoanKind !== 'loan' ? (
+                <>
+                  <div>
+                    <label className="text-xs text-slate-500">{newLoanKind === 'cash' ? 'Efectivo disponible ($)' : 'Saldo disponible hoy ($)'}</label>
+                    <input type="number" step="0.01" value={newLoanBalance} onChange={e => setNewLoanBalance(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+                  </div>
+                  {newLoanKind === 'wallet' && (
+                    <div>
+                      <label className="text-xs text-slate-500">Saldo en dólares (opcional)</label>
+                      <input type="number" step="0.01" value={newLoanBalanceUsd} onChange={e => setNewLoanBalanceUsd(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="text-xs text-slate-500">Saldo deudor actual ($)</label>
+                    <input type="number" step="0.01" value={newLoanTotal} onChange={e => setNewLoanTotal(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">Cuota mensual ($)</label>
+                    <input type="number" step="0.01" value={newLoanInstallment} onChange={e => setNewLoanInstallment(e.target.value)} placeholder="0.00" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-xs text-slate-500">Cuotas totales</label>
+                      <input type="number" min="1" value={newLoanInstTotal} onChange={e => setNewLoanInstTotal(e.target.value)} placeholder="120" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500">Cuotas pagas</label>
+                      <input type="number" min="0" value={newLoanInstPaid} onChange={e => setNewLoanInstPaid(e.target.value)} placeholder="0" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500">Día venc.</label>
+                      <input type="number" min="1" max="31" value={newLoanDueDay} onChange={e => setNewLoanDueDay(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+                    </div>
+                  </div>
+                </>
+              )}
               <button type="submit" className="w-full bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">
-                Guardar Billetera / Préstamo
+                Guardar
               </button>
             </form>
           </div>
@@ -2543,7 +2703,7 @@ export default function FinanzasDRMIA() {
                       className="w-full border border-indigo-200 rounded-lg px-2 py-1.5 bg-white text-slate-800"
                     >
                       {creditCards.map(c => <option key={c.id} value={`card:${c.id}`}>Tarjeta: {c.name}</option>)}
-                      {loans.map(l => <option key={l.id} value={`loan:${l.id}`}>Billetera/Préstamo: {l.entity}</option>)}
+                      {loans.map(l => <option key={l.id} value={`loan:${l.id}`}>{loanKind(l) === 'loan' ? 'Préstamo' : loanKind(l) === 'cash' ? 'Efectivo' : 'Billetera'}: {l.entity}</option>)}
                       {migrationData.entity_name && <option value="new-loan">Crear billetera/cuenta nueva: {migrationData.entity_name}</option>}
                       {migrationData.entity_name && <option value="new-card">Crear tarjeta nueva: {migrationData.entity_name}</option>}
                       <option value="none">No vincular (se puede asignar después)</option>

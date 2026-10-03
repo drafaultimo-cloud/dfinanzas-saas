@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Type } from '@google/genai';
-import { GEMINI_MODEL, IMAGE_OR_PDF, getAI, handleError, readUpload, requireUser } from '@/lib/server/guard';
+import { GEMINI_MODEL, IMAGE_OR_PDF, getAI, generateWithRetry, handleError, readUpload, requireUser } from '@/lib/server/guard';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     const { buffer, mimeType } = await readUpload(formData.get('file') as File | null, IMAGE_OR_PDF);
 
     const ai = getAI();
-    const response = await ai.models.generateContent({
+    const response = await generateWithRetry(ai, {
       model: GEMINI_MODEL,
       contents: [
         { inlineData: { mimeType, data: buffer.toString('base64') } },

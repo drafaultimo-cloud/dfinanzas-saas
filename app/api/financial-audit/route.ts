@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GEMINI_MODEL, getAI, handleError, requireUser } from '@/lib/server/guard';
+import { GEMINI_MODEL, getAI, generateWithRetry, handleError, requireUser } from '@/lib/server/guard';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -46,7 +46,7 @@ Generá un diagnóstico ejecutivo, estructurado exactamente en estos 3 puntos:
 Sé conciso, empático y hablá en segunda persona (voseo argentino).`;
 
     const ai = getAI();
-    const response = await ai.models.generateContent({
+    const response = await generateWithRetry(ai, {
       model: GEMINI_MODEL,
       contents: [prompt],
       config: { temperature: 0.2 },

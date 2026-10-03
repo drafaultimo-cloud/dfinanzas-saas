@@ -5,6 +5,7 @@ import {
   GEMINI_MODEL,
   IMAGE_OR_PDF,
   getAI,
+  generateWithRetry,
   handleError,
   parseModelJson,
   readUpload,
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
     }
 
     const ai = getAI();
-    const response = await ai.models.generateContent({
+    const response = await generateWithRetry(ai, {
       model: GEMINI_MODEL,
       contents,
       config: {

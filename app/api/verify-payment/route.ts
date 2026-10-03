@@ -5,6 +5,7 @@ import {
   GEMINI_MODEL,
   IMAGE_OR_PDF,
   getAI,
+  generateWithRetry,
   handleError,
   parseModelJson,
   readUpload,
@@ -68,7 +69,7 @@ Extraé con precisión (solo lo que se ve en la imagen, sin inventar):
 Respondé únicamente un JSON con estas claves exactas.`;
 
     const ai = getAI();
-    const response = await ai.models.generateContent({
+    const response = await generateWithRetry(ai, {
       model: GEMINI_MODEL,
       contents: [{ inlineData: { mimeType, data: buffer.toString('base64') } }, prompt],
       config: {

@@ -5,6 +5,7 @@ import { AccessState, computeAccess } from '../access';
 import { isAdminEmail } from '../access';
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+export const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash';
 export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // Vercel limita el body a ~4,5 MB
 
 export class ApiError extends Error {
@@ -184,3 +185,106 @@ export function parseModelJson<T = any>(text: string | undefined): T {
 }
 
 export const IMAGE_OR_PDF = /^(image\/(jpeg|png|webp|heic|heif)|application\/pdf)$/i;
+
+
+// ---- Llamadas a IA con reintentos y respaldo ----
+// Orden: Gemini (2 intentos) -> Claude (si hay ANTHROPIC_API_KEY) -> Gemini de respaldo -> error amable.
+const CLAUDE_MODEL = process.env.CLAUDE_FALLBACK_MODEL || 'claude-sonnet-5-5';
+
+const isTransient = (e: any) => {
+  const text = `${e?.status ?? ''} ${e?.code ?? ''} ${e?.message ?? ''}`.toLowerCase();
+  return /\b(429|500|502|503|504)\b|unavailable|overloaded|high demand|resource_exhausted|deadline/.test(text);
+};
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/** Traduce el formato de Gemini (texto + inlineData) al de la API de mensajes de Claude. */
+async function callClaude(params: any): Promise<{ text: string }> {
+  const apiKey = env('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY no configurada');
+
+  const parts: any[] = Array.isArray(params.contents) ? params.contents : [params.contents];
+  const content: any[] = [];
+  for (const p of parts) {
+    if (typeof p === 'string') content.push({ type: 'text', text: p });
+    else if (p?.text) content.push({ type: 'text', text: String(p.text) });
+    else if (p?.inlineData) {
+      const { mimeType, data } = p.inlineData;
+      content.push(
+        mimeType === 'application/pdf'
+          ? { type: 'document', source: { type: 'base64', media_type: mimeType, data } }
+          : { type: 'image', source: { type: 'base64', media_type: mimeType, data } }
+      );
+    }
+  }
+
+  const cfg = params.config || {};
+  if (cfg.responseSchema) {
+    content.push({
+      type: 'text',
+      text: 'Respondé ÚNICAMENTE con un JSON válido (sin texto extra ni bloques de código) que cumpla este esquema:\n' +
+        JSON.stringify(cfg.responseSchema),
+    });
+  } else if (cfg.responseMimeType === 'application/json') {
+    content.push({ type: 'text', text: 'Respondé ÚNICAMENTE con el JSON pedido, sin texto extra ni bloques de código.' });
+  }
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: Math.min(Number(cfg.maxOutputTokens) || 8192, 16000),
+      temperature: typeof cfg.temperature === 'number' ? cfg.temperature : 0,
+      messages: [{ role: 'user', content }],
+    }),
+    signal: AbortSignal.timeout(50000),
+  });
+  const json: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Claude ${res.status}: ${json?.error?.message || 'error'}`);
+  const text = (json.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+  if (!text) throw new Error('Claude devolvió una respuesta vacía');
+  return { text };
+}
+
+export async function generateWithRetry(ai: GoogleGenAI, params: any): Promise<{ text?: string }> {
+  const primary = params.model || GEMINI_MODEL;
+  let lastError: unknown;
+
+  // 1) Gemini principal
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await ai.models.generateContent({ ...params, model: primary });
+    } catch (e) {
+      lastError = e;
+      if (!isTransient(e)) throw e;
+      if (attempt === 0) await sleep(800);
+    }
+  }
+
+  // 2) Claude como respaldo (solo si hay clave configurada)
+  if (env('ANTHROPIC_API_KEY')) {
+    try {
+      console.warn('Gemini saturado: usando Claude como respaldo.');
+      return await callClaude(params);
+    } catch (e) {
+      lastError = e;
+      console.error('Falló el respaldo con Claude:', e);
+    }
+  }
+
+  // 3) Otro modelo de Gemini, último intento
+  if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== primary) {
+    try {
+      return await ai.models.generateContent({ ...params, model: GEMINI_FALLBACK_MODEL });
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  console.error('IA no disponible tras reintentos:', lastError);
+  throw new ApiError(503, 'El servicio de IA está saturado en este momento. Esperá un minuto y volvé a intentar.');
+}

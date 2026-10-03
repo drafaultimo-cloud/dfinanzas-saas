@@ -2,10 +2,10 @@
 
 import React, { useMemo, useState } from 'react';
 import { budgetStatus, currentMonthOf, dailyDigest, formatArs, goalProgress, upcomingEvents } from '@/lib/planning';
-import { needsFxFix } from '@/lib/fx';
+import { needsFxFix, needsOwnTransferFix } from '@/lib/fx';
 import { HubProps, useTable } from './ui';
 
-export type AlertTarget = 'budgets' | 'dues' | 'goals' | 'add' | 'history' | 'fx';
+export type AlertTarget = 'budgets' | 'dues' | 'goals' | 'add' | 'history' | 'fx' | 'owntransfer';
 
 interface AlertItem {
   key: string;
@@ -96,6 +96,10 @@ export default function AlertsStrip(p: HubProps & { onGo: (t: AlertTarget) => vo
     }
 
     // 5) Pendientes por completar
+    const ownPending = p.readOnly ? [] : p.transactions.filter(t => needsOwnTransferFix(t) && !needsFxFix(t));
+    if (ownPending.length > 0) {
+      out.push({ key: 'owntransfer', level: 'mid', icon: '🏧', text: <><strong>{ownPending.length}</strong> movimiento{ownPending.length === 1 ? '' : 's'} (retiro de efectivo o &quot;Transferencia propia&quot;) cuenta{ownPending.length === 1 ? '' : 'n'} como gasto y es plata tuya.</>, target: 'owntransfer', action: 'Corregir' });
+    }
     const fxPending = p.readOnly ? [] : p.transactions.filter(needsFxFix);
     if (fxPending.length > 0) {
       out.push({ key: 'fx', level: 'mid', icon: '💱', text: <><strong>{fxPending.length}</strong> movimiento{fxPending.length === 1 ? '' : 's'} parece{fxPending.length === 1 ? '' : 'n'} compra o venta de dólares y figura{fxPending.length === 1 ? '' : 'n'} como gasto o ingreso.</>, target: 'fx', action: 'Corregir' });

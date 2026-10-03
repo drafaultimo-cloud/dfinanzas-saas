@@ -20,7 +20,7 @@ import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip
 import CategorySelect, { saveUserCategory } from '@/components/CategorySelect';
 import { isOlderStatement, reconcileTotal, statementCloseDate } from '@/lib/statement';
 import { buildCategories } from '@/lib/categories';
-import { FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
+import { needsOwnTransferFix, FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
 import { applyRules, cleanDesc, computeNetWorth, findDuplicateGroups, findSimilarExisting } from '@/lib/planning';
 import { 
@@ -837,6 +837,7 @@ export default function FinanzasDRMIA() {
   // Las alertas de "Hoy en tu app" llevan directo a donde se resuelven.
   function goToAlert(t: AlertTarget) {
     if (t === 'fx') { void fixFxTransactions(); return; }
+    if (t === 'owntransfer') { void fixOwnTransfers(); return; }
     const tabs: Partial<Record<AlertTarget, PlanningTab>> = { budgets: 'presupuestos', dues: 'vencimientos', goals: 'metas' };
     const tab = tabs[t];
     if (tab) { setPlanningTab(tab); setSection('planificacion'); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -1229,6 +1230,20 @@ export default function FinanzasDRMIA() {
     refreshAll(user.id);
   }
 
+  // Retiros de efectivo y similares guardados como gasto: pasan a transferencia propia (no cuentan).
+  async function fixOwnTransfers() {
+    if (!user) return;
+    const list = transactions.filter(t => needsOwnTransferFix(t) && !needsFxFix(t));
+    if (list.length === 0) { alert('No encontré movimientos para corregir.'); return; }
+    const sample = list.slice(0, 3).map(t => `• ${cleanDesc(t.description).slice(0, 40)} (${formatMoney(Number(t.amount), t.currency || 'ARS')})`).join('\n');
+    if (!confirm(`Voy a pasar ${list.length} movimiento(s) a "Transferencia propia", para que dejen de contar como gasto:\n\n${sample}${list.length > 3 ? '\n…' : ''}\n\nDespués podés indicar a qué cuenta o efectivo fueron.`)) return;
+    const { error } = await supabase.from('transactions')
+      .update({ operation_type: 'transfer', category: 'Transferencia propia', income_source: null })
+      .in('id', list.map(t => t.id)).eq('user_id', user.id);
+    if (error) { alert('No se pudo corregir: ' + error.message); return; }
+    refreshAll(user.id);
+  }
+
   function handleUpdatePreviewCategory(index: number, newCategory: string) {
     if (!migrationData?.items) return;
     const updated = [...migrationData.items];
@@ -1526,8 +1541,10 @@ export default function FinanzasDRMIA() {
   }, [creditCards]);
 
   const totalDebtMode = useMemo(() => {
-    return toMode(totalDebtArs, 'ARS') + toMode(totalDebtUsd, 'USD');
-  }, [totalDebtArs, totalDebtUsd, toMode]);
+    // Un saldo en dólares a favor no compensa la deuda en pesos (se paga el resumen en pesos igual): solo suma la deuda en USD.
+    const usdOwed = creditCards.reduce((acc, c) => acc + Math.max(0, Number(c.balance_usd || 0)), 0);
+    return toMode(totalDebtArs, 'ARS') + toMode(usdOwed, 'USD');
+  }, [totalDebtArs, creditCards, toMode]);
 
   // Compromiso de deuda del mes: lo que hay que pagar este mes (resumen de tarjetas + cuotas de préstamos
   // e hipotecarios) ÷ ingresos del período. El saldo total de un hipotecario no entra acá: va al patrimonio.
@@ -1570,9 +1587,10 @@ export default function FinanzasDRMIA() {
   // Cuántos días de gasto cubre el superávit del período (no es un saldo bancario).
   const survivalDays = useMemo(() => {
     if (dailyAverageExpense <= 0) return 999;
-    const availableCash = Math.max(netBalance, 0);
-    return Math.floor(availableCash / dailyAverageExpense);
-  }, [netBalance, dailyAverageExpense]);
+    // Cuántos días alcanza la plata que tenés hoy (billeteras + efectivo + dólares), al ritmo de gasto diario.
+    const liquid = toMode(digitalAvailableArs + cashAvailableArs, 'ARS') + toMode(digitalAvailableUsd, 'USD');
+    return Math.floor(Math.max(liquid, 0) / dailyAverageExpense);
+  }, [digitalAvailableArs, cashAvailableArs, digitalAvailableUsd, dailyAverageExpense, toMode]);
 
   const projectedMonthEndExpense = useMemo(() => {
     return dailyAverageExpense * periodInfo.total;
@@ -1596,8 +1614,10 @@ export default function FinanzasDRMIA() {
     filteredTransactions
       .filter(t => isRefund(t) && !isTransfer(t) && t.category && t.category !== 'Ingreso')
       .forEach(t => add(t.category, -toMode(Number(t.amount || 0), t.currency)));
-    return acc.filter(c => c.value > 0.005);
+    return acc.sort((a, b) => b.value - a.value);
   }, [purchaseTransactions, filteredTransactions, toMode]);
+  // El gráfico solo dibuja rubros con gasto neto positivo; los que quedaron a favor (reintegro mayor al gasto) se listan aparte.
+  const expensePieData = useMemo(() => expenseDataByCategory.filter(c => c.value > 0.005), [expenseDataByCategory]);
 
   // Rubros disponibles: los base + los propios + los que ya aparecen en los movimientos.
   const allCategories = useMemo(() => buildCategories(userCategories, transactions), [userCategories, transactions]);
@@ -2294,7 +2314,7 @@ export default function FinanzasDRMIA() {
               <Clock className="w-4 h-4 text-blue-500" />
             </div>
             <div className="text-2xl font-black text-blue-600">{survivalDays} días</div>
-            <p className="text-[10px] text-slate-400">Superávit del período ÷ gasto diario</p>
+            <p className="text-[10px] text-slate-400">Disponible en billeteras y efectivo ÷ gasto diario</p>
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
@@ -2366,9 +2386,9 @@ export default function FinanzasDRMIA() {
                       <button
                         onClick={() => convertCardToWallet(c)}
                         title="Si esto en realidad es una billetera o caja de ahorro, convertila"
-                        className="w-full mt-2 py-1 px-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[10px] font-bold rounded-lg cursor-pointer"
+                        className="w-full mt-2 text-[10px] text-slate-400 hover:text-amber-700 underline underline-offset-2 text-left cursor-pointer"
                       >
-                        No es tarjeta: convertir en billetera/cuenta
+                        ¿No es una tarjeta? Convertir en billetera/cuenta
                       </button>
                       <button
                         onClick={() => openMovements('card', c.id, c.name)}
@@ -2713,11 +2733,11 @@ export default function FinanzasDRMIA() {
             </div>
 
             <div className="w-full h-56">
-              {expenseDataByCategory.length > 0 ? (
+              {expensePieData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie 
-                      data={expenseDataByCategory} 
+                      data={expensePieData} 
                       cx="50%" 
                       cy="50%" 
                       innerRadius={50} 
@@ -2727,7 +2747,7 @@ export default function FinanzasDRMIA() {
                       onClick={(data: any) => setSelectedCategoryDetail(data?.name || null)}
                       className="cursor-pointer"
                     >
-                      {expenseDataByCategory.map((_entry: any, index: number) => (
+                      {expensePieData.map((_entry: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
@@ -2750,7 +2770,9 @@ export default function FinanzasDRMIA() {
                 >
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></span>
                   <span className="text-slate-800">{entry.name}:</span>
-                  <span className="font-bold text-slate-900">{formatMoney(entry.value, currencyMode)}</span>
+                  {entry.value < -0.005
+                    ? <span className="font-bold text-emerald-600">{formatMoney(Math.abs(entry.value), currencyMode)} a favor</span>
+                    : <span className="font-bold text-slate-900">{formatMoney(entry.value, currencyMode)}</span>}
                   <Eye className="w-3 h-3 text-slate-400 ml-0.5" />
                 </button>
               ))}

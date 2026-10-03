@@ -40,3 +40,14 @@ export const isFxTx = (t: { category?: string; operation_type?: string; descript
 /** Movimientos que parecen cambio de moneda pero quedaron guardados como gasto o ingreso. */
 export const needsFxFix = (t: { operation_type?: string; description?: string; category?: string }) =>
   isFxDescription(t.description) && t.operation_type !== 'transfer' && t.operation_type !== 'payment' && t.category !== FX_CATEGORY;
+
+/** Retiro de efectivo (cajero/ventanilla): la plata pasa de la cuenta al efectivo propio, no es un gasto. */
+export function isCashWithdrawal(desc?: string | null): boolean {
+  const d = fold(desc || '');
+  return /\b(retiro|extraccion)\s+(de\s+)?(dinero|efectivo|fondos)\b|\bretiro\s+(en\s+)?(cajero|atm|ventanilla)\b|\bcajero\s+(automatico|atm)\b/.test(d);
+}
+
+/** Movimientos guardados como gasto que en realidad son plata propia (retiro de efectivo o rubro "Transferencia propia"). */
+export const needsOwnTransferFix = (t: { operation_type?: string; description?: string; category?: string; type?: string }) =>
+  t.type === 'expense' && (t.operation_type === 'purchase' || !t.operation_type) &&
+  (isCashWithdrawal(t.description) || t.category === 'Transferencia propia') && !isFxDescription(t.description);

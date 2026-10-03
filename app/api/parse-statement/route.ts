@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { STATEMENT_CATEGORIES, todayLocal } from '@/lib/config';
-import { fxDirectionFromDescription, isFxDescription } from '@/lib/fx';
+import { fxDirectionFromDescription, isCashWithdrawal, isFxDescription } from '@/lib/fx';
 import {
   ApiError,
   GEMINI_MODEL,
@@ -79,7 +79,7 @@ function normalizeStatement(raw: any) {
       const desc = String(it?.description || '');
       const fx = isFxDescription(desc);
       if (fx) op = 'transfer';
-      else if (isOwnTransfer(desc)) op = 'transfer';
+      else if (isOwnTransfer(desc) || (op === 'purchase' && isCashWithdrawal(desc))) op = 'transfer';
       else if (op === 'refund' && /transferencia recibida|rendimiento|dep[oó]sito|acreditaci/i.test(desc)) op = 'income';
       let direction: 'in' | 'out' = it?.direction === 'in' ? 'in' : it?.direction === 'out' ? 'out' : (op === 'purchase' ? 'out' : 'in');
       if (op === 'transfer' && it?.direction !== 'in' && it?.direction !== 'out') direction = fx ? (fxDirectionFromDescription(desc) || 'out') : /recib/i.test(desc) ? 'in' : 'out';

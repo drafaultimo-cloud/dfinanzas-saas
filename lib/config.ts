@@ -41,4 +41,4 @@ export function todayLocal(d: Date = new Date()): string {
 }
 
 // Se muestra al pie de la app: sirve para comprobar qué versión está corriendo en el celular.
-export const APP_VERSION = '2026.10.03-i';
+export const APP_VERSION = '2026.10.03-j';

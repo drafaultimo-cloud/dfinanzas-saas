@@ -104,7 +104,7 @@ export function upcomingEvents(cards: Tx[], loans: Tx[], recurring: Tx[], today:
     if (daysLeft <= horizonDays) ev.push({ kind, label, date: ymd(d), daysLeft, amount });
   };
   for (const c of cards) {
-    const debt = cardDebtArs(c) + Number(c.balance_usd || 0) * usdRate;
+    const debt = cardDebtArs(c) + Math.max(0, Number(c.balance_usd || 0)) * usdRate; // un saldo en dólares a favor no baja lo que hay que pagar en pesos
     push('card_close', `Cierre de ${c.name}`, Number(c.closing_day));
     push('card_due', `Vence ${c.name}`, Number(c.due_day), debt > 0 ? debt : undefined);
   }
@@ -484,8 +484,11 @@ export function findDuplicateGroups(txs: Tx[]): DuplicateGroup[] {
       }
       if (group.length < 2) continue;
       const tokenSets = group.map(g => payeeTokens(g.description));
-      const shared = tokenSets[0].some(tok => tokenSets.slice(1).some(ts => ts.includes(tok)));
-      const sameDesc = new Set(group.map(g => plain(cleanDesc(g.description)).slice(0, 14))).size === 1;
+      const texts = group.map(g => plain(cleanDesc(g.description)).trim());
+      // Un texto que es el otro con algo agregado ("IVA ..." / "IVA ... (Base Imponible ...)") es la misma línea del resumen.
+      const contained = texts[0].length >= 8 && texts.slice(1).some(t => t !== texts[0] && (t.startsWith(texts[0]) || texts[0].startsWith(t)));
+      const shared = contained || tokenSets[0].some(tok => tokenSets.slice(1).some(ts => ts.includes(tok)));
+      const sameDesc = new Set(group.map(g => plain(cleanDesc(g.description)))).size === 1;
       const amountBig = Math.abs(Number(group[0].amount)) >= 10000;
       // El mismo texto exacto el mismo día suele ser una compra repetida legítima (dos cafés): solo se avisa si el importe es alto.
       if (!amountBig && (!shared || sameDesc)) continue;

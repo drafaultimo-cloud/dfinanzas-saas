@@ -245,6 +245,8 @@ export default function FinanzasDRMIA() {
   const [isEditCardModalOpen, setIsEditCardModalOpen] = useState(false);
   const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+  const [adminTab, setAdminTab] = useState<'review' | 'users'>('review');
+  const [adminBusy, setAdminBusy] = useState(false);
 
   // Importador IA
   const [targetEntityForImport, setTargetEntityForImport] = useState<{ type: 'card' | 'loan', id: string, name: string } | null>(null);
@@ -601,7 +603,9 @@ export default function FinanzasDRMIA() {
       await evaluateAccessAndLoad(user);
 
       if (data.approved) {
-        alert('¡Comprobante verificado con éxito! Tu suscripción quedó activa por 30 días.');
+        alert('¡Comprobante recibido! Tu suscripción quedó habilitada por 30 días. Lo vamos a revisar manualmente en el día; si hubiera algún problema te escribimos por el chat.');
+      } else if (data.manualReview) {
+        alert('Recibimos tu comprobante. Como hubo un inconveniente con un pago anterior, esta vez lo autoriza Dionicio manualmente. Te habilitamos en cuanto lo revise; podés escribirle por el chat.');
       } else {
         alert('No pudimos aprobar el comprobante automáticamente:\n- ' + (data.reasons || []).join('\n- ') + '\n\nPodés subir otro comprobante o escribirnos por el chat.');
       }
@@ -611,6 +615,33 @@ export default function FinanzasDRMIA() {
       setIsUploadingReceipt(false);
       setReceiptFile(null);
     }
+  }
+
+  async function handleCancelSubscription(u: any) {
+    if (!confirm(`¿Cancelar la suscripción de ${u.user_email} por falta de pago o comprobante inválido?\n\nPierde el acceso pago y su próximo comprobante quedará en revisión manual.`)) return;
+    setAdminBusy(true);
+    try {
+      const res = await authFetch('/api/admin/overview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: u.user_id, action: 'cancel' }),
+      });
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || res.status);
+      await loadAdminMetrics();
+      alert('Suscripción cancelada. Escribile por el chat para aclarar la situación.');
+    } catch (err: any) {
+      alert('No se pudo cancelar: ' + (err?.message || err));
+    } finally {
+      setAdminBusy(false);
+    }
+  }
+
+  function openChatWithUser(u: any) {
+    setIsAdminPanelOpen(false);
+    setSelectedChatUser(u);
+    setIsChatModalOpen(true);
+    loadChatMessages(u.user_email);
   }
 
   async function handleVerifyByAdmin(receiptId: string, status: 'verified' | 'rejected') {
@@ -2082,6 +2113,11 @@ export default function FinanzasDRMIA() {
             </p>
           </div>
 
+          {receiptFeedback?.ai_status === 'pending_manual' && receiptFeedback?.admin_status === 'pending' && (
+            <div className="bg-sky-500/10 border border-sky-500/30 text-sky-200 text-[11px] p-3 rounded-xl">
+              Tu comprobante está en revisión manual. Te habilitamos apenas lo autorice Dionicio; podés escribirle por el chat.
+            </div>
+          )}
           {receiptFeedback?.ai_status === 'rejected_by_ai' && (
             <div className="bg-amber-500/10 border border-amber-500/30 text-amber-200 text-[11px] p-3 rounded-xl">
               Último comprobante no aprobado: {receiptFeedback.ai_notes}
@@ -2317,6 +2353,16 @@ export default function FinanzasDRMIA() {
           )
         ) : (
         <div className={viewingOwner ? 'pointer-events-none select-text space-y-6' : 'space-y-6'}>
+        {isSuperUser && !viewingOwner && adminReceipts.some(r => r.admin_status === 'pending') && (
+          <div className="bg-purple-50 border border-purple-200 text-purple-900 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span>
+              🔔 <strong>{adminReceipts.filter(r => r.admin_status === 'pending').length} comprobante(s) por revisar</strong>
+              {adminReceipts.some(r => r.admin_status === 'pending' && r.ai_status === 'pending_manual') && ' · hay pagos que requieren tu autorización manual'}
+              . Los usuarios con pago por IA están habilitados provisoriamente hasta que los revises.
+            </span>
+            <button onClick={() => { setAdminTab('review'); setIsAdminPanelOpen(true); }} className="bg-purple-600 text-white font-bold px-3 py-1.5 rounded-xl cursor-pointer">Revisar ahora</button>
+          </div>
+        )}
         {user && (
           <AlertsStrip
             supabase={supabase}
@@ -4196,30 +4242,102 @@ export default function FinanzasDRMIA() {
       )}
 
       {/* Panel Superusuario */}
-      {isAdminPanelOpen && (
+      {isAdminPanelOpen && (() => {
+        const pendingList = adminReceipts.filter(r => r.admin_status === 'pending');
+        const fmtDate = (d?: string) => (d ? new Date(d).toLocaleDateString('es-AR') : '—');
+        const aiLabel = (r: any) =>
+          r.ai_status === 'approved_by_ai' ? { t: 'IA: aprobado (habilitado)', c: 'bg-emerald-100 text-emerald-800' }
+          : r.ai_status === 'pending_manual' ? { t: 'Revisión manual obligatoria', c: 'bg-sky-100 text-sky-800' }
+          : { t: 'IA: rechazado', c: 'bg-amber-100 text-amber-800' };
+        const userRows = adminUsersList.map((u: any) => {
+          const mine = adminReceipts.filter(r => r.user_id === u.user_id);
+          const acc = computeAccess({ email: u.user_email, createdAt: u.created_at, receipts: mine });
+          return {
+            u, acc, mine,
+            last: mine[0],
+            pending: mine.filter(r => r.admin_status === 'pending').length,
+            manual: mine.some(r => r.admin_status === 'rejected'),
+          };
+        }).sort((x: any, y: any) => (y.pending - x.pending) || ((x.acc.status === 'paid' ? 0 : 1) - (y.acc.status === 'paid' ? 0 : 1)));
+        const stLabel: any = {
+          paid: { t: 'Pago', c: 'bg-emerald-100 text-emerald-800' },
+          trial: { t: 'Prueba', c: 'bg-indigo-100 text-indigo-800' },
+          expired: { t: 'Vencido', c: 'bg-rose-100 text-rose-800' },
+          admin: { t: 'Admin', c: 'bg-slate-200 text-slate-700' },
+        };
+        return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-4xl rounded-3xl p-4 sm:p-6 shadow-2xl space-y-4 max-h-[90dvh] flex flex-col">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900">Auditoría de Pagos</h3>
+              <h3 className="text-base font-bold text-slate-900">Cobros y usuarios</h3>
               <button onClick={() => setIsAdminPanelOpen(false)}><X className="w-5 h-5" /></button>
             </div>
+            <div className="flex gap-2 text-xs">
+              <button onClick={() => setAdminTab('review')} className={`px-3 py-1.5 rounded-xl font-bold cursor-pointer ${adminTab === 'review' ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600'}`}>Por revisar ({pendingList.length})</button>
+              <button onClick={() => setAdminTab('users')} className={`px-3 py-1.5 rounded-xl font-bold cursor-pointer ${adminTab === 'users' ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600'}`}>Usuarios ({adminUsersList.length})</button>
+            </div>
+
             <div className="flex-1 overflow-y-auto space-y-3">
-              {adminReceipts.map(r => (
-                <div key={r.id} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex justify-between items-center text-xs">
-                  <div>
-                    <p className="font-bold text-slate-900">{r.user_email} • ${r.amount}</p>
-                    <p className="text-slate-500">{r.ai_notes}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => handleVerifyByAdmin(r.id, 'verified')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Aprobar</button>
-                    <button onClick={() => handleVerifyByAdmin(r.id, 'rejected')} className="bg-rose-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Rechazar</button>
-                  </div>
-                </div>
-              ))}
+              {adminTab === 'review' && (
+                <>
+                  {pendingList.length === 0 && <p className="text-xs text-slate-500 text-center py-8">No hay comprobantes pendientes de revisión. ✅</p>}
+                  {pendingList.map(r => {
+                    const l = aiLabel(r);
+                    const owner = adminUsersList.find((x: any) => x.user_id === r.user_id);
+                    return (
+                      <div key={r.id} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 text-xs">
+                        <div className="flex flex-wrap justify-between gap-2">
+                          <p className="font-bold text-slate-900">{r.user_email} • ${Number(r.amount).toLocaleString('es-AR')} • {String(r.plan || '').toUpperCase()}</p>
+                          <span className={`px-2 py-0.5 rounded-full font-bold ${l.c}`}>{l.t}</span>
+                        </div>
+                        <p className="text-slate-500">Cargado {fmtDate(r.created_at)} · transferencia del {fmtDate(r.transfer_date)} · op. {r.operation_number || 'sin número'} · {r.sender_name}</p>
+                        <p className="text-slate-600">{r.ai_notes}</p>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <button disabled={adminBusy} onClick={() => handleVerifyByAdmin(r.id, 'verified')} className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Autorizar</button>
+                          <button disabled={adminBusy} onClick={() => handleVerifyByAdmin(r.id, 'rejected')} className="bg-rose-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Rechazar (falso)</button>
+                          {owner && <button onClick={() => openChatWithUser(owner)} className="bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Abrir chat</button>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              {adminTab === 'users' && (
+                <>
+                  {userRows.length === 0 && <p className="text-xs text-slate-500 text-center py-8">Todavía no hay usuarios registrados.</p>}
+                  {userRows.map(({ u, acc, last, pending, manual }: any) => {
+                    const st = stLabel[acc.status];
+                    return (
+                      <div key={u.user_id} className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-900 truncate">{u.user_email}</p>
+                          <p className="text-slate-500">
+                            Alta {fmtDate(u.created_at)}
+                            {acc.status === 'paid' && ` · paga hasta ${fmtDate(acc.paidUntil || undefined)} (${(acc.plan || '').toUpperCase()})`}
+                            {acc.status === 'trial' && ` · prueba: ${acc.trialDaysLeft} día(s)`}
+                            {last && ` · último comprobante ${fmtDate(last.created_at)}`}
+                          </p>
+                          {manual && <p className="text-sky-700 font-semibold">Antecedente de pago rechazado/cancelado: sus comprobantes se autorizan a mano.</p>}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded-full font-bold ${st.c}`}>{st.t}</span>
+                          {pending > 0 && <span className="px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-800">{pending} por revisar</span>}
+                          <button onClick={() => openChatWithUser(u)} className="bg-slate-800 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Chat</button>
+                          {acc.status === 'paid' && (
+                            <button disabled={adminBusy} onClick={() => handleCancelSubscription(u)} className="bg-rose-600 text-white px-3 py-1.5 rounded-xl font-bold cursor-pointer">Cancelar suscripción</button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
     </div>
   );

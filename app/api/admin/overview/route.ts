@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isAdminEmail } from '@/lib/access';
+import { computeAccess, isAdminEmail } from '@/lib/access';
 import { ApiError, handleError, requireAdmin, requireAdminClient } from '@/lib/server/guard';
 
 export const dynamic = 'force-dynamic';
@@ -48,5 +48,48 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     return handleError(error, 'Error actualizando comprobante:');
+  }
+}
+
+/** Cancelar la suscripción de un usuario (falta de pago / comprobante falso):
+ *  rechaza sus comprobantes vigentes, del más nuevo al más viejo, hasta que deje de figurar como pago.
+ *  Sus próximos comprobantes quedarán en revisión manual (ver verify-payment). */
+export async function POST(req: NextRequest) {
+  try {
+    await requireAdmin(req);
+    const admin = requireAdminClient();
+    const { user_id, action } = await req.json().catch(() => ({}));
+    if (!user_id || action !== 'cancel') throw new ApiError(400, 'Datos inválidos.');
+
+    const { data: au, error: uErr } = await admin.auth.admin.getUserById(String(user_id));
+    if (uErr || !au?.user) throw new ApiError(404, 'Usuario no encontrado.');
+    if (isAdminEmail(au.user.email)) throw new ApiError(400, 'No se puede cancelar una cuenta administradora.');
+
+    const { data: receipts, error } = await admin
+      .from('payment_receipts')
+      .select('*')
+      .eq('user_id', au.user.id)
+      .order('created_at', { ascending: false });
+    if (error) throw new ApiError(500, 'No se pudieron leer los comprobantes.');
+
+    let rows = receipts || [];
+    const stateOf = () =>
+      computeAccess({ email: au.user.email, createdAt: au.user.created_at, receipts: rows }).status;
+    if (stateOf() !== 'paid') throw new ApiError(400, 'El usuario no tiene una suscripción paga vigente.');
+
+    const cancelled: string[] = [];
+    for (const r of [...rows]) {
+      if (stateOf() !== 'paid') break;
+      if (r.admin_status === 'rejected') continue;
+      const valid = r.admin_status === 'verified' || r.ai_status === 'approved_by_ai';
+      if (!valid) continue;
+      const { error: upErr } = await admin.from('payment_receipts').update({ admin_status: 'rejected' }).eq('id', r.id);
+      if (upErr) throw new ApiError(500, 'No se pudo cancelar el comprobante.');
+      rows = rows.map(x => (x.id === r.id ? { ...x, admin_status: 'rejected' } : x));
+      cancelled.push(r.id);
+    }
+    return NextResponse.json({ ok: true, cancelled: cancelled.length, status: stateOf() });
+  } catch (error) {
+    return handleError(error, 'Error cancelando suscripción:');
   }
 }

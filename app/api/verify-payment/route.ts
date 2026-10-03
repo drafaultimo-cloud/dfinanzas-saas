@@ -132,7 +132,18 @@ Respondé únicamente un JSON con estas claves exactas.`;
       if (dupOp && dupOp.length > 0) reasons.push('Ese número de operación ya fue utilizado.');
     }
 
-    const approved = reasons.length === 0;
+    // Cobro por transferencia (etapa inicial): si el administrador ya rechazó o canceló un pago
+    // de este usuario, los comprobantes siguientes NO se habilitan solos: los autoriza él a mano.
+    const { data: priorRejected } = await admin
+      .from('payment_receipts')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('admin_status', 'rejected')
+      .limit(1);
+    const manualOnly = !!(priorRejected && priorRejected.length > 0);
+
+    const aiApproved = reasons.length === 0;
+    const approved = aiApproved && !manualOnly;
 
     const { data: inserted, error: insertError } = await admin
       .from('payment_receipts')
@@ -147,9 +158,14 @@ Respondé únicamente un JSON con estas claves exactas.`;
           operation_number: opNumber || null,
           receipt_hash: hash,
           plan,
-          ai_status: approved ? 'approved_by_ai' : 'rejected_by_ai',
+          ai_status: manualOnly ? 'pending_manual' : approved ? 'approved_by_ai' : 'rejected_by_ai',
           ai_notes: `Plan: ${plan.toUpperCase()} (Promo 40% OFF). ${
-            approved ? 'Aprobado: ' + (a.reason || 'controles OK') : 'Rechazado: ' + reasons.join(' | ')
+            manualOnly
+              ? 'REVISIÓN MANUAL (pago anterior rechazado/cancelado). Lectura IA: ' +
+                (aiApproved ? 'controles OK' : reasons.join(' | '))
+              : approved
+                ? 'Aprobado: ' + (a.reason || 'controles OK')
+                : 'Rechazado: ' + reasons.join(' | ')
           }`,
           admin_status: 'pending',
         },
@@ -158,7 +174,7 @@ Respondé únicamente un JSON con estas claves exactas.`;
       .single();
     if (insertError) throw new Error('No se pudo registrar el comprobante: ' + insertError.message);
 
-    return NextResponse.json({ approved, reasons, receipt: inserted });
+    return NextResponse.json({ approved, manualReview: manualOnly, reasons, receipt: inserted });
   } catch (error) {
     if (error instanceof Error && error.message === 'DUP_FILE') {
       return NextResponse.json({ error: 'Ese comprobante ya fue utilizado en otro pago.' }, { status: 409 });

@@ -7,8 +7,9 @@ export const dynamic = 'force-dynamic';
 const clip = (v: unknown, n: number) => String(v ?? '').replace(/[\r\n]+/g, ' ').slice(0, n);
 
 export async function POST(req: NextRequest) {
+  let release: () => Promise<void> = async () => {};
   try {
-    await requireUser(req, { needPro: true, rateKey: 'audit', rateMax: 10 });
+    ({ release } = await requireUser(req, { needPro: true, rateKey: 'audit', rateMax: 10, quota: 'audit' }));
 
     const body = await req.json().catch(() => ({}));
     const currency = body.currency === 'USD' ? 'USD' : 'ARS';
@@ -54,6 +55,7 @@ Sé conciso, empático y hablá en segunda persona (voseo argentino).`;
 
     return NextResponse.json({ diagnosis: response.text || 'Sin observaciones este período.' });
   } catch (error) {
+    await release().catch(() => {}); // si falló, no se descuenta el uso del mes
     return handleError(error, 'Error generando auditoría financiera:');
   }
 }

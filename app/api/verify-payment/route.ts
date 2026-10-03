@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
       rateKey: 'pay',
       rateMax: 6,
       rateWindowMs: 60 * 60 * 1000,
+      quota: 'pay',
     });
     const admin = requireAdminClient();
 
@@ -116,6 +117,9 @@ Respondé únicamente un JSON con estas claves exactas.`;
       if (diffDays > MAX_DAYS_OLD) reasons.push(`El comprobante tiene más de ${MAX_DAYS_OLD} días de antigüedad.`);
       if (diffDays < -1) reasons.push('La fecha del comprobante es futura.');
     }
+
+    // Sin número de operación no hay forma de evitar que se reutilice una captura: no se aprueba solo.
+    if (!opNumber) reasons.push('No se pudo leer el número de operación del comprobante. Subí una captura donde se vea completo.');
 
     if (opNumber) {
       const { data: dupOp } = await admin

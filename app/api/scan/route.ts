@@ -6,8 +6,9 @@ export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  let release: () => Promise<void> = async () => {};
   try {
-    await requireUser(req, { needPro: true, rateKey: 'scan', rateMax: 20 });
+    ({ release } = await requireUser(req, { needPro: true, rateKey: 'scan', rateMax: 20, quota: 'scan' }));
 
     const formData = await req.formData();
     const { buffer, mimeType } = await readUpload(formData.get('file') as File | null, IMAGE_OR_PDF);
@@ -39,6 +40,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(JSON.parse(response.text || '{}'));
   } catch (error) {
+    await release().catch(() => {}); // si falló, no se descuenta el uso del mes
     return handleError(error, 'Error analizando ticket:');
   }
 }

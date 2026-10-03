@@ -127,8 +127,9 @@ function normalizeStatement(raw: any) {
 }
 
 export async function POST(req: NextRequest) {
+  let release: () => Promise<void> = async () => {};
   try {
-    await requireUser(req, { needPro: true, rateKey: 'parse', rateMax: 15 });
+    ({ release } = await requireUser(req, { needPro: true, rateKey: 'parse', rateMax: 15, quota: 'parse' }));
 
     const prompt = buildPrompt(todayLocal());
     const contentType = req.headers.get('content-type') || '';
@@ -162,6 +163,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(normalizeStatement(parseModelJson(response.text)));
   } catch (error) {
+    await release().catch(() => {}); // si falló, no se descuenta el uso del mes
     return handleError(error, 'Error procesando extracto:');
   }
 }

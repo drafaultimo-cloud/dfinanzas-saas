@@ -3,6 +3,7 @@ import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 import { AccessState, computeAccess } from '../access';
 import { isAdminEmail } from '../access';
+import { AI_MONTHLY_LIMITS, QUOTA_LABEL, QuotaKind } from '../config';
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 // Opcional: otro modelo de Gemini como último intento (vacío = no se usa; un modelo retirado devuelve 404).
@@ -110,7 +111,35 @@ type GuardOpts = {
   rateKey?: string;
   rateMax?: number;
   rateWindowMs?: number;
+  /** tope mensual persistente (en base de datos); si falta, solo rige el límite por ráfaga */
+  quota?: QuotaKind;
 };
+
+const monthKey = () => new Date().toISOString().slice(0, 7);
+
+/**
+ * Cuenta un uso en la base (atómico). Si ya llegó al tope mensual, corta con 429.
+ * Si todavía no se corrió la migración 012, no bloquea (queda registrado en el log del servidor).
+ */
+async function consumeQuota(userId: string, kind: QuotaKind, limit: number) {
+  const admin = getAdminClient();
+  if (!admin) return { release: async () => {} };
+  const month = monthKey();
+  const { data, error } = await admin.rpc('consume_ai_quota', { p_user: userId, p_kind: kind, p_month: month, p_limit: limit });
+  if (error) {
+    console.error('consume_ai_quota falló (¿falta la migración 012?):', error.message);
+    return { release: async () => {} };
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  if (row && row.allowed === false) {
+    throw new ApiError(429, `Llegaste al límite de este mes (${limit}) de ${QUOTA_LABEL[kind]}. Se renueva el día 1. Si lo necesitás antes, escribinos por el chat.`);
+  }
+  return {
+    release: async () => {
+      await admin.rpc('release_ai_quota', { p_user: userId, p_kind: kind, p_month: month });
+    },
+  };
+}
 
 /** Autentica la request y valida suscripción + límite de uso. */
 export async function requireUser(req: NextRequest, opts: GuardOpts = {}) {
@@ -140,7 +169,14 @@ export async function requireUser(req: NextRequest, opts: GuardOpts = {}) {
       }
     }
   }
-  return { user, access };
+  // Tope mensual persistente (el admin no tiene tope).
+  let release: () => Promise<void> = async () => {};
+  if (opts.quota && access?.status !== 'admin') {
+    const tier = access?.status === 'paid' ? 'paid' : 'trial';
+    const q = await consumeQuota(user.id, opts.quota, AI_MONTHLY_LIMITS[tier][opts.quota]);
+    release = q.release;
+  }
+  return { user, access, release };
 }
 
 export async function requireAdmin(req: NextRequest) {

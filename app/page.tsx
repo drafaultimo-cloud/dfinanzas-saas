@@ -15,8 +15,8 @@ import {
 } from '@/lib/config';
 import { AccessState, computeAccess, isAdminEmail } from '@/lib/access';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import PlanningHub from '@/components/planning/PlanningHub';
-import AlertsStrip from '@/components/planning/AlertsStrip';
+import PlanningHub, { type Tab as PlanningTab } from '@/components/planning/PlanningHub';
+import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
 import { applyRules, cleanDesc, computeNetWorth, findDuplicateGroups, findSimilarExisting } from '@/lib/planning';
 import { 
@@ -174,6 +174,11 @@ export default function FinanzasDRMIA() {
   const viewingRef = useRef<{ id: string; email: string } | null>(null);
   const [categoryRules, setCategoryRules] = useState<any[]>([]);
   const planningJobsDone = useRef<string | null>(null);
+  const [planningTab, setPlanningTab] = useState<PlanningTab | undefined>(undefined);
+  const [newLoanAssetName, setNewLoanAssetName] = useState('');
+  const [newLoanAssetValue, setNewLoanAssetValue] = useState('');
+  const [newLoanAssetCur, setNewLoanAssetCur] = useState<'ARS' | 'USD'>('USD');
+  const [assetLoan, setAssetLoan] = useState<any | null>(null);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [expenseSort, setExpenseSort] = useState<'date' | 'amount'>('amount');
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
@@ -817,11 +822,21 @@ export default function FinanzasDRMIA() {
     refreshAll(user.id);
   }
 
+  // Las alertas de "Hoy en tu app" llevan directo a donde se resuelven.
+  function goToAlert(t: AlertTarget) {
+    const tabs: Partial<Record<AlertTarget, PlanningTab>> = { budgets: 'presupuestos', dues: 'vencimientos', goals: 'metas' };
+    const tab = tabs[t];
+    if (tab) { setPlanningTab(tab); setSection('planificacion'); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    setSection('resumen');
+    setTimeout(() => document.getElementById(t === 'add' ? 'seccion-cargar' : 'seccion-historial')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  }
+
   function openLoanModal(kind: 'wallet' | 'cash' | 'loan') {
     setNewLoanKind(kind);
     setNewLoanEntity(kind === 'cash' ? 'Efectivo' : '');
     setNewLoanTotal(''); setNewLoanInstallment(''); setNewLoanBalance(''); setNewLoanBalanceUsd('');
     setNewLoanInstTotal(''); setNewLoanInstPaid(''); setNewLoanDueDay('10');
+    setNewLoanAssetName(''); setNewLoanAssetValue(''); setNewLoanAssetCur('USD');
     setIsLoanModalOpen(true);
   }
 
@@ -841,6 +856,11 @@ export default function FinanzasDRMIA() {
       total_installments: isLoan ? instTotal : 1,
       paid_installments: isLoan ? instPaid : 1,
       due_day: isLoan ? Math.min(31, Math.max(1, parseInt(newLoanDueDay || '10', 10) || 10)) : 10,
+      ...(isLoan && parseFloat(newLoanAssetValue) > 0 ? {
+        asset_name: newLoanAssetName.trim() || null,
+        asset_value: parseFloat(newLoanAssetValue),
+        asset_currency: newLoanAssetCur,
+      } : {}),
       ...(isLoan ? {} : {
         balance_ars: parseFloat(newLoanBalance || '0'),
         balance_usd: newLoanKind === 'wallet' && newLoanBalanceUsd ? parseFloat(newLoanBalanceUsd) : null,
@@ -848,7 +868,7 @@ export default function FinanzasDRMIA() {
     }]);
 
     if (error) {
-      alert('No se pudo guardar (¿corriste la migración 007?): ' + error.message);
+      alert('No se pudo guardar (¿corriste las migraciones 007 y 009?): ' + error.message);
       return;
     }
     setIsLoanModalOpen(false);
@@ -875,6 +895,26 @@ export default function FinanzasDRMIA() {
     const { error } = await supabase.from('loans').update({ balance_ars: val }).eq('id', l.id).eq('user_id', user.id);
     if (error) { alert('No se pudo guardar: ' + error.message); return; }
     refreshAll(user.id);
+  }
+
+  // Valor del bien que respalda un préstamo (casa, auto…): suma al patrimonio como activo.
+  async function saveLoanAsset(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user || !assetLoan) return;
+    const value = parseFloat(newLoanAssetValue);
+    const patch = value > 0
+      ? { asset_name: newLoanAssetName.trim() || null, asset_value: value, asset_currency: newLoanAssetCur }
+      : { asset_name: null, asset_value: null, asset_currency: 'ARS' };
+    const { error } = await supabase.from('loans').update(patch).eq('id', assetLoan.id).eq('user_id', user.id);
+    if (error) { alert('No se pudo guardar (¿corriste la migración 009?): ' + error.message); return; }
+    setAssetLoan(null);
+    refreshAll(user.id);
+  }
+  function openAssetModal(l: any) {
+    setAssetLoan(l);
+    setNewLoanAssetName(l.asset_name || '');
+    setNewLoanAssetValue(l.asset_value ? String(l.asset_value) : '');
+    setNewLoanAssetCur(l.asset_currency === 'ARS' ? 'ARS' : 'USD');
   }
 
   // Reclasifica un ítem (por ejemplo, una billetera que quedó cargada como préstamo).
@@ -1411,11 +1451,14 @@ export default function FinanzasDRMIA() {
     return toMode(totalDebtArs, 'ARS') + toMode(totalDebtUsd, 'USD');
   }, [totalDebtArs, totalDebtUsd, toMode]);
 
-  // Peso de la deuda: saldo de tarjetas ÷ ingresos del período.
+  // Compromiso de deuda del mes: lo que hay que pagar este mes (resumen de tarjetas + cuotas de préstamos
+  // e hipotecarios) ÷ ingresos del período. El saldo total de un hipotecario no entra acá: va al patrimonio.
+  const loansMonthlyMode = useMemo(() => toMode(loansMonthlyArs, 'ARS'), [loansMonthlyArs, toMode]);
+  const debtDueMonth = useMemo(() => Math.max(totalDebtMode, 0) + loansMonthlyMode, [totalDebtMode, loansMonthlyMode]);
   const debtRatio = useMemo(() => {
     if (totalIncome <= 0) return 0;
-    return (Math.max(totalDebtMode, 0) / totalIncome) * 100;
-  }, [totalDebtMode, totalIncome]);
+    return (debtDueMonth / totalIncome) * 100;
+  }, [debtDueMonth, totalIncome]);
 
   const savingsRate = useMemo(() => {
     if (totalIncome <= 0) return 0;
@@ -2002,6 +2045,8 @@ export default function FinanzasDRMIA() {
         {section === 'planificacion' ? (
           user && (
             <PlanningHub
+              key={planningTab || 'default'}
+              initialTab={planningTab}
               supabase={supabase}
               userId={viewingOwner?.id || user.id}
               ownUserId={user.id}
@@ -2031,7 +2076,7 @@ export default function FinanzasDRMIA() {
             profile={profileType}
             usdRate={usdRate}
             onChanged={() => {}}
-            onOpen={() => setSection('planificacion')}
+            onGo={goToAlert}
           />
         )}
 
@@ -2123,12 +2168,15 @@ export default function FinanzasDRMIA() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
             <div className="flex justify-between items-center">
-              <span className="text-xs text-slate-400">Deuda / Ingresos del período</span>
-              <span className={`w-3 h-3 rounded-full ${debtRatio < 50 ? 'bg-emerald-500' : debtRatio <= 100 ? 'bg-amber-500' : 'bg-rose-500'}`}></span>
+              <span className="text-xs text-slate-400">Deuda a pagar / Ingresos</span>
+              <span className={`w-3 h-3 rounded-full ${debtRatio < 35 ? 'bg-emerald-500' : debtRatio <= 50 ? 'bg-amber-500' : 'bg-rose-500'}`}></span>
             </div>
             <div className="text-2xl font-black text-slate-900">{debtRatio.toFixed(1)}%</div>
             <p className="text-[10px] text-slate-400">
-              {debtRatio < 50 ? '🟢 Saludable (<50% del ingreso)' : debtRatio <= 100 ? '🟡 Alerta (50-100%)' : '🔴 Crítico (>100%)'}
+              {debtRatio < 35 ? '🟢 Saludable (<35% del ingreso)' : debtRatio <= 50 ? '🟡 Alerta (35-50%)' : '🔴 Crítico (>50%)'}
+            </p>
+            <p className="text-[10px] text-slate-400 break-words">
+              Tarjetas {formatMoney(Math.max(totalDebtMode, 0), currencyMode)} + cuotas de préstamos {formatMoney(loansMonthlyMode, currencyMode)}
             </p>
           </div>
 
@@ -2387,6 +2435,14 @@ export default function FinanzasDRMIA() {
                         {Number(l.total_installments) > 1 && (
                           <p className="text-[10px] text-slate-500">Cuotas pagas: {l.paid_installments} de {l.total_installments} (faltan {remaining})</p>
                         )}
+                        {Number(l.asset_value) > 0 ? (
+                          <p className="text-[10px] text-emerald-700 font-semibold mt-0.5 break-words">
+                            Bien: {l.asset_name || 'sin nombre'} · {l.asset_currency === 'USD' ? 'u$s ' : '$ '}{Number(l.asset_value).toLocaleString('es-AR')}
+                          </p>
+                        ) : null}
+                        <button onClick={() => openAssetModal(l)} className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer mt-0.5 text-left">
+                          {Number(l.asset_value) > 0 ? 'Editar valor del bien' : '+ Cargar el bien que respalda este crédito (casa, auto…)'}
+                        </button>
                       </div>
                       <button
                         onClick={() => openMovements('loan', l.id, l.entity)}
@@ -2411,7 +2467,7 @@ export default function FinanzasDRMIA() {
 
         {/* Formulario de Carga Manual con Selector de Moneda */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+          <div id="seccion-cargar" className="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4 scroll-mt-4">
             <div className="flex bg-slate-100 p-1 rounded-xl">
               <button 
                 type="button"
@@ -2593,7 +2649,7 @@ export default function FinanzasDRMIA() {
         </div>
 
         {/* Historial General */}
-        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+        <div id="seccion-historial" className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm scroll-mt-4">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-sm font-bold text-slate-900">Historial de Movimientos ({filteredTransactions.length} registros)</h3>
             <div className="flex flex-wrap gap-2">
@@ -2827,6 +2883,18 @@ export default function FinanzasDRMIA() {
                     <div>
                       <label className="text-xs text-slate-500">Día venc.</label>
                       <input type="number" min="1" max="31" value={newLoanDueDay} onChange={e => setNewLoanDueDay(e.target.value)} className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+                    </div>
+                  </div>
+                  <div className="border border-emerald-100 bg-emerald-50/50 rounded-xl p-3 space-y-2">
+                    <p className="text-[11px] font-bold text-emerald-800">Bien que respalda el crédito (opcional)</p>
+                    <p className="text-[10px] text-slate-500">Si es hipotecario o prendario, cargá el valor de la casa o el auto: así el patrimonio muestra el activo y no solo la deuda.</p>
+                    <input type="text" value={newLoanAssetName} onChange={e => setNewLoanAssetName(e.target.value)} placeholder="Ej: Casa, Departamento, Auto" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white" />
+                    <div className="flex gap-2">
+                      <input type="number" step="0.01" min="0" value={newLoanAssetValue} onChange={e => setNewLoanAssetValue(e.target.value)} placeholder="Valor del bien" className="flex-1 min-w-0 text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white" />
+                      <select value={newLoanAssetCur} onChange={e => setNewLoanAssetCur(e.target.value as 'ARS' | 'USD')} className="text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white">
+                        <option value="USD">u$s</option>
+                        <option value="ARS">$ ARS</option>
+                      </select>
                     </div>
                   </div>
                 </>
@@ -3221,6 +3289,30 @@ export default function FinanzasDRMIA() {
           </div>
         );
       })()}
+
+      {/* MODAL: BIEN QUE RESPALDA UN PRÉSTAMO */}
+      {assetLoan && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <form onSubmit={saveLoanAsset} className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-3 border border-slate-100">
+            <div className="flex justify-between items-start gap-3">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-slate-900">Bien de “{assetLoan.entity}”</h3>
+                <p className="text-[11px] text-slate-500">Valor actual de la casa, el departamento o el auto. Suma como activo en tu patrimonio. Dejá el valor vacío para quitarlo.</p>
+              </div>
+              <button type="button" onClick={() => setAssetLoan(null)} className="text-slate-400 hover:text-slate-600 p-1 shrink-0"><X className="w-5 h-5" /></button>
+            </div>
+            <input type="text" value={newLoanAssetName} onChange={e => setNewLoanAssetName(e.target.value)} placeholder="Ej: Casa, Departamento, Auto" className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+            <div className="flex gap-2">
+              <input type="number" step="0.01" min="0" value={newLoanAssetValue} onChange={e => setNewLoanAssetValue(e.target.value)} placeholder="Valor del bien" className="flex-1 min-w-0 text-xs border border-slate-200 rounded-xl p-2.5 outline-none" />
+              <select value={newLoanAssetCur} onChange={e => setNewLoanAssetCur(e.target.value as 'ARS' | 'USD')} className="text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white">
+                <option value="USD">u$s</option>
+                <option value="ARS">$ ARS</option>
+              </select>
+            </div>
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs py-2.5 rounded-xl cursor-pointer">Guardar</button>
+          </form>
+        </div>
+      )}
 
       {/* MODAL: DESGLOSE DE GASTOS NETOS DEL PERÍODO */}
       {isExpenseModalOpen && (() => {

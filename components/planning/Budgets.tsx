@@ -87,12 +87,27 @@ export default function Budgets(p: HubProps) {
       )}
 
       {!p.readOnly && (
-        <form onSubmit={save} className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-slate-100">
-          <select value={category} onChange={e => setCategory(e.target.value)} className={inputCls}>
-            {cats.map(c => <option key={c}>{c}</option>)}
-          </select>
-          <input type="number" min="1" step="1" value={limit} onChange={e => setLimit(e.target.value)} placeholder="Tope mensual ($)" className={inputCls} required />
-          <input type="number" min="1" max="100" value={alertPct} onChange={e => setAlertPct(e.target.value)} title="Avisar al llegar a este %" className={inputCls} />
+        <form onSubmit={save} className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-slate-100 items-end">
+          <label className="block">
+            <span className="block text-[10px] text-slate-500 mb-0.5">Rubro</span>
+            <select value={category} onChange={e => setCategory(e.target.value)} className={inputCls}>
+              {cats.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="block text-[10px] text-slate-500 mb-0.5">Tope mensual</span>
+            <span className="relative block">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">$</span>
+              <input type="number" min="1" step="1" value={limit} onChange={e => setLimit(e.target.value)} placeholder="0" className={inputCls + ' !pl-6'} required />
+            </span>
+          </label>
+          <label className="block">
+            <span className="block text-[10px] text-slate-500 mb-0.5">Avisar al llegar al</span>
+            <span className="relative block">
+              <input type="number" min="1" max="100" value={alertPct} onChange={e => setAlertPct(e.target.value)} title="Avisar al llegar a este porcentaje del tope" className={inputCls + ' !pr-7'} />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">%</span>
+            </span>
+          </label>
           <button className={btnPrimary} disabled={busy}>Guardar tope</button>
         </form>
       )}

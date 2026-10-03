@@ -11,7 +11,7 @@ import Rules from './Rules';
 import Reports from './Reports';
 import Sharing, { SharingProps } from './Sharing';
 
-type Tab = 'presupuestos' | 'vencimientos' | 'recurrentes' | 'cuotas' | 'patrimonio' | 'metas' | 'reglas' | 'reportes' | 'compartir';
+export type Tab = 'presupuestos' | 'vencimientos' | 'recurrentes' | 'cuotas' | 'patrimonio' | 'metas' | 'reglas' | 'reportes' | 'compartir';
 
 const TABS: { id: Tab; label: string; readOnlyOk: boolean }[] = [
   { id: 'presupuestos', label: 'Presupuestos', readOnlyOk: false },
@@ -25,8 +25,8 @@ const TABS: { id: Tab; label: string; readOnlyOk: boolean }[] = [
   { id: 'compartir', label: 'Compartir', readOnlyOk: true },
 ];
 
-export default function PlanningHub(props: SharingProps) {
-  const [tab, setTab] = useState<Tab>('presupuestos');
+export default function PlanningHub(props: SharingProps & { initialTab?: Tab }) {
+  const [tab, setTab] = useState<Tab>(props.initialTab || 'presupuestos');
   const visible = TABS.filter(t => !props.readOnly || t.readOnlyOk);
   const active = visible.some(t => t.id === tab) ? tab : visible[0].id;
 

@@ -2,7 +2,7 @@
 
 import React, { useMemo } from 'react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { computeNetWorth, formatArs } from '@/lib/planning';
+import { computeNetWorth, formatArs, loanAssetArs } from '@/lib/planning';
 import { Card, EmptyHint, HubProps, MigrationNotice, useTable } from './ui';
 
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -11,6 +11,7 @@ const label = (ym: string) => `${MONTHS[Number(ym.slice(5, 7)) - 1]} ${ym.slice(
 export default function NetWorthPanel(p: HubProps) {
   const { rows, missing } = useTable<any>(p.supabase, 'net_worth_snapshots', p.userId, 'month');
   const nw = useMemo(() => computeNetWorth(p.creditCards, p.loans, p.usdRate), [p.creditCards, p.loans, p.usdRate]);
+  const loansWithoutAsset = p.loans.filter((l: any) => (l.kind === 'loan' || (l.kind == null && (l.balance_ars === null || l.balance_ars === undefined))) && !(loanAssetArs(l, p.usdRate) > 0));
   const history = rows.map((r: any) => ({
     name: label(r.month),
     Activos: Number(r.assets_ars),
@@ -21,14 +22,19 @@ export default function NetWorthPanel(p: HubProps) {
   const change = history.length > 1 ? nw.net - first : null;
 
   return (
-    <Card title="Patrimonio neto" subtitle="Lo que tenés (billeteras, cajas de ahorro, efectivo, saldo a favor) menos lo que debés (tarjetas y préstamos). Los dólares se convierten con la cotización elegida.">
+    <Card title="Patrimonio neto" subtitle="Lo que tenés (billeteras, efectivo, saldo a favor y el valor de los bienes que cargaste, como la casa o el auto) menos lo que debés (tarjetas y préstamos). Los dólares se convierten con la cotización elegida.">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-        <div className="bg-emerald-50 rounded-xl p-3"><p className="text-emerald-700">Activos</p><p className="text-base font-black text-emerald-800">{formatArs(nw.assets)}</p><p className="text-[10px] text-emerald-700/70">Digital {formatArs(nw.digital)} · Efectivo {formatArs(nw.cash)}</p></div>
+        <div className="bg-emerald-50 rounded-xl p-3"><p className="text-emerald-700">Activos</p><p className="text-base font-black text-emerald-800">{formatArs(nw.assets)}</p><p className="text-[10px] text-emerald-700/70">Digital {formatArs(nw.digital)} · Efectivo {formatArs(nw.cash)}{nw.property > 0 ? ` · Bienes ${formatArs(nw.property)}` : ''}</p></div>
         <div className="bg-rose-50 rounded-xl p-3"><p className="text-rose-700">Deudas</p><p className="text-base font-black text-rose-800">{formatArs(nw.liabilities)}</p><p className="text-[10px] text-rose-700/70">Tarjetas {formatArs(nw.cardsDebt)} · Préstamos {formatArs(nw.loansDebt)}</p></div>
         <div className="bg-slate-50 rounded-xl p-3 md:col-span-2"><p className="text-slate-500">Patrimonio neto hoy</p><p className={`text-xl font-black ${nw.net < 0 ? 'text-rose-700' : 'text-slate-900'}`}>{formatArs(nw.net)}</p>
           {change !== null && <p className="text-[10px] text-slate-500">{change >= 0 ? 'Mejoró' : 'Empeoró'} {formatArs(Math.abs(change))} desde {history[0].name}</p>}
         </div>
       </div>
+      {loansWithoutAsset.length > 0 && (
+        <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+          {loansWithoutAsset.map((l: any) => l.entity).join(', ')}: hoy se cuenta solo como deuda. Si el crédito financió una casa o un auto, cargá el valor del bien en la caja de Préstamos (“Cargar el bien que respalda este crédito”) para que el patrimonio sea realista. Si es un préstamo personal sin bien asociado, está bien así.
+        </p>
+      )}
       {missing && <MigrationNotice table="net_worth_snapshots" />}
       {history.length < 2 ? (
         <EmptyHint>La evolución se arma sola: la app guarda una foto de tu patrimonio cada mes que la abrís. Desde el próximo mes vas a ver la línea.</EmptyHint>

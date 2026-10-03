@@ -259,21 +259,67 @@ export function projectCommitments(
 }
 
 // ---------- 5) Patrimonio neto ----------
-export interface NetWorth { assets: number; liabilities: number; net: number; digital: number; cash: number; cardsDebt: number; loansDebt: number; }
+export interface NetWorth { assets: number; liabilities: number; net: number; digital: number; cash: number; cardsDebt: number; loansDebt: number; property: number; }
+/** Valor del bien asociado a un préstamo (casa, auto…), en pesos. 0 si no se cargó. */
+export const loanAssetArs = (l: Tx, usdRate: number) => {
+  const v = Number(l.asset_value || 0);
+  return v > 0 ? (l.asset_currency === 'USD' ? v * usdRate : v) : 0;
+};
 export function computeNetWorth(cards: Tx[], loans: Tx[], usdRate: number): NetWorth {
-  let digital = 0, cash = 0, cardsNet = 0, loansDebt = 0;
+  let digital = 0, cash = 0, cardsNet = 0, loansDebt = 0, property = 0;
   for (const l of loans) {
     const kind = l.kind || (l.balance_ars !== null && l.balance_ars !== undefined ? 'wallet' : 'loan');
-    if (kind === 'loan') loansDebt += Math.max(0, Number(l.total_amount || 0));
-    else {
+    if (kind === 'loan') {
+      loansDebt += Math.max(0, Number(l.total_amount || 0));
+      property += loanAssetArs(l, usdRate);
+    } else {
       const v = Number(l.balance_ars || 0) + Number(l.balance_usd || 0) * usdRate;
       if (kind === 'cash') cash += v; else digital += v;
     }
   }
   for (const c of cards) cardsNet += cardDebtArs(c) + Number(c.balance_usd || 0) * usdRate;
-  const assets = digital + cash + Math.max(0, -cardsNet);
+  const assets = digital + cash + property + Math.max(0, -cardsNet);
   const liabilities = Math.max(0, cardsNet) + loansDebt;
-  return { assets: Math.round(assets), liabilities: Math.round(liabilities), net: Math.round(assets - liabilities), digital: Math.round(digital), cash: Math.round(cash), cardsDebt: Math.round(Math.max(0, cardsNet)), loansDebt: Math.round(loansDebt) };
+  return { assets: Math.round(assets), liabilities: Math.round(liabilities), net: Math.round(assets - liabilities), digital: Math.round(digital), cash: Math.round(cash), cardsDebt: Math.round(Math.max(0, cardsNet)), loansDebt: Math.round(loansDebt), property: Math.round(property) };
+}
+
+// ---------- 5b) Resumen diario para las alertas de la pantalla ----------
+export interface DailyDigest {
+  lastTxDate: string | null;     // fecha del último movimiento cargado
+  daysSinceLast: number | null;  // días desde ese movimiento (0 = hoy)
+  yesterdayTotal: number;        // gastos netos de ayer (ARS)
+  yesterdayCount: number;
+  weekTotal: number;             // gastos netos de los últimos 7 días (incluye hoy)
+  prevWeekTotal: number;         // los 7 días anteriores
+  unassignedTransfers: number;   // transferencias / pagos sin origen o destino asignado
+}
+export function dailyDigest(txs: Tx[], profile: Profile, usdRate: number, today: Date): DailyDigest {
+  const t0 = startOfDay(today);
+  const dayStr = (back: number) => ymd(new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() - back));
+  const yesterday = dayStr(1);
+  const w1 = new Set(Array.from({ length: 7 }, (_, i) => dayStr(i)));
+  const w2 = new Set(Array.from({ length: 7 }, (_, i) => dayStr(i + 7)));
+  let last: string | null = null, yT = 0, yC = 0, wT = 0, pT = 0, unassigned = 0;
+  for (const t of txs) {
+    if (!t.date || txProfile(t) !== profile) continue;
+    if (t.date <= ymd(t0) && (!last || t.date > last)) last = t.date;
+    if (isTransferTx(t)) {
+      if (!t.transfer_account && t.operation_type === 'transfer') unassigned++;
+      continue;
+    }
+    if (t.type === 'income' && !isRefundTx(t)) continue;
+    const amt = toArs(Number(t.amount || 0), t.currency, usdRate) * (isRefundTx(t) ? -1 : 1);
+    if (t.date === yesterday) { yT += amt; yC++; }
+    if (w1.has(t.date)) wT += amt;
+    else if (w2.has(t.date)) pT += amt;
+  }
+  return {
+    lastTxDate: last,
+    daysSinceLast: last ? Math.max(0, diffDays(t0, new Date(`${last}T00:00:00`))) : null,
+    yesterdayTotal: Math.max(0, Math.round(yT)), yesterdayCount: yC,
+    weekTotal: Math.max(0, Math.round(wT)), prevWeekTotal: Math.max(0, Math.round(pT)),
+    unassignedTransfers: unassigned,
+  };
 }
 
 // ---------- 6) Metas ----------

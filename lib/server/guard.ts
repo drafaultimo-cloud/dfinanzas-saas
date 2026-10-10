@@ -277,7 +277,7 @@ async function callClaude(params: any): Promise<{ text: string }> {
       max_tokens: Math.min(Number(cfg.maxOutputTokens) || 8192, 16000),
       messages: [{ role: 'user', content }],
     }),
-    signal: AbortSignal.timeout(50000),
+    signal: AbortSignal.timeout(45000),
   });
   const json: any = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`Claude ${res.status}: ${json?.error?.message || 'error'}`);
@@ -286,26 +286,43 @@ async function callClaude(params: any): Promise<{ text: string }> {
   return { text };
 }
 
+/** Presupuesto total de una llamada a IA: debe quedar por debajo de maxDuration (60 s) de las rutas,
+ *  para responder con un error amable en vez de que Vercel corte con 504. */
+const AI_BUDGET_MS = 54000;
+const GEMINI_FIRST_TRY_MS = 24000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label}: deadline exceeded (timeout ${ms} ms)`)), Math.max(1000, ms));
+    p.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
+}
+
 export async function generateWithRetry(ai: GoogleGenAI, params: any): Promise<{ text?: string }> {
   const primary = params.model || GEMINI_MODEL;
+  const started = Date.now();
+  const left = () => AI_BUDGET_MS - (Date.now() - started);
   let lastError: unknown;
 
-  // 1) Gemini principal
+  // 1) Gemini principal: primer intento acotado (si se cuelga, no gastamos todo el tiempo disponible)
   for (let attempt = 0; attempt < 2; attempt++) {
+    // El segundo intento solo si quedan al menos 15 s y no hay respaldo de Claude esperando.
+    if (attempt === 1 && (env('ANTHROPIC_API_KEY') || left() < 15000)) break;
     try {
-      return await ai.models.generateContent({ ...params, model: primary });
+      const ms = attempt === 0 ? Math.min(GEMINI_FIRST_TRY_MS, left()) : left() - 1000;
+      return await withTimeout(ai.models.generateContent({ ...params, model: primary }), ms, 'Gemini');
     } catch (e) {
       lastError = e;
       if (!isTransient(e)) throw e;
-      if (attempt === 0) await sleep(800);
+      if (attempt === 0) await sleep(500);
     }
   }
 
-  // 2) Claude como respaldo (solo si hay clave configurada)
-  if (env('ANTHROPIC_API_KEY')) {
+  // 2) Claude como respaldo (solo si hay clave configurada y queda tiempo)
+  if (env('ANTHROPIC_API_KEY') && left() > 8000) {
     try {
-      console.warn('Gemini saturado: usando Claude como respaldo.');
-      return await callClaude(params);
+      console.warn('Gemini lento o saturado: usando Claude como respaldo.');
+      return await withTimeout(callClaude(params), left() - 1000, 'Claude');
     } catch (e) {
       lastError = e;
       console.error('Falló el respaldo con Claude:', e);
@@ -313,14 +330,14 @@ export async function generateWithRetry(ai: GoogleGenAI, params: any): Promise<{
   }
 
   // 3) Otro modelo de Gemini, último intento
-  if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== primary) {
+  if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== primary && left() > 8000) {
     try {
-      return await ai.models.generateContent({ ...params, model: GEMINI_FALLBACK_MODEL });
+      return await withTimeout(ai.models.generateContent({ ...params, model: GEMINI_FALLBACK_MODEL }), left() - 1000, 'Gemini respaldo');
     } catch (e) {
       lastError = e;
     }
   }
 
   console.error('IA no disponible tras reintentos:', lastError);
-  throw new ApiError(503, 'El servicio de IA está saturado en este momento. Esperá un minuto y volvé a intentar.');
+  throw new ApiError(503, 'El servicio de IA está lento o saturado en este momento. Esperá un minuto y volvé a intentar; tu cupo del mes no se descontó.');
 }

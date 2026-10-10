@@ -42,3 +42,12 @@ test('Plan Z: lo vencido deja de estar pendiente y el día 31 no se desborda', (
   assert.equal(nextInstallment(plan, '2026-02-15')?.n, 2);
   assert.equal(nextInstallment(plan, '2026-04-01'), null);
 });
+
+import { ignoredPayments } from '../lib/cards';
+test('pagos ignorados: anteriores al resumen o sin fecha base', () => {
+  const pay = (date: string) => ({ type: 'expense', operation_type: 'payment', amount: 100, date, transfer_account: 'card:c1', loan_id: 'w' });
+  const r = ignoredPayments({ id: 'c1', balance_date: '2026-10-08' }, [pay('2026-10-05'), pay('2026-10-13')]);
+  assert.equal(r.payments.length, 1);
+  assert.equal(r.total, 100);
+  assert.equal(ignoredPayments({ id: 'c1' }, [pay('2026-10-13')]).payments.length, 1);
+});

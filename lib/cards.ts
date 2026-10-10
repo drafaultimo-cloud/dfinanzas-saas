@@ -50,6 +50,21 @@ export function paymentsToCard(card: CardLike, txs: PayTx[]): PayTx[] {
   );
 }
 
+/**
+ * Pagos hacia esta tarjeta que NO se descuentan, con el motivo: no hay fecha base, o son de fecha igual o anterior
+ * a ella (pagaban el resumen anterior). Sirve para explicarle al usuario por qué la deuda no bajó.
+ */
+export function ignoredPayments(card: CardLike, txs: PayTx[]): { payments: PayTx[]; total: number; base: string } {
+  const base = baseDate(card);
+  const key = `card:${card.id}`;
+  const payments = txs.filter(t =>
+    t.transfer_account === key && !t.credit_card_id && t.type === 'expense' &&
+    (t.operation_type === 'payment' || t.operation_type === 'transfer') &&
+    (t.currency || 'ARS') === 'ARS' && !!t.date && (!base || t.date <= base)
+  );
+  return { payments, total: Math.round(payments.reduce((a, t) => a + Number(t.amount || 0), 0) * 100) / 100, base };
+}
+
 export const paidSinceBase = (card: CardLike, txs: PayTx[]): number =>
   Math.round(paymentsToCard(card, txs).reduce((a, t) => a + Number(t.amount || 0), 0) * 100) / 100;
 

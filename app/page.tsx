@@ -23,7 +23,7 @@ import { buildCategories, categoryLabel } from '@/lib/categories';
 import { suggestRuleKeyword, ruleCovers } from '@/lib/rules';
 import { accountKey, suggestTransferPairs } from '@/lib/transfers';
 import { LEGAL } from '@/lib/legal';
-import { addMonths, cardPlansPending, nextInstallment, outstandingArs, paidSinceBase, planSchedule, type CardPlan } from '@/lib/cards';
+import { addMonths, cardPlansPending, nextInstallment, ignoredPayments, outstandingArs, paidSinceBase, planSchedule, type CardPlan } from '@/lib/cards';
 import { EMPTY_FILTER, filterHistory, isFilterActive, toCsv, type HistoryFilter } from '@/lib/history';
 import { needsOwnTransferFix, FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
@@ -2712,6 +2712,7 @@ export default function FinanzasDRMIA() {
                           {(() => {
                             const eff = outstandingArs(c, transactions);
                             const paid = paidSinceBase(c, transactions);
+                            const ign = ignoredPayments(c, transactions);
                             const today = todayLocal();
                             const plans = cardPlans.filter(pl => pl.credit_card_id === c.id && nextInstallment(pl, today));
                             const zPending = cardPlansPending(c.id, cardPlans, today);
@@ -2723,6 +2724,12 @@ export default function FinanzasDRMIA() {
                                 {paid > 0 && (
                                   <p className="text-[10px] text-slate-500">
                                     Resumen {formatMoney(cardBalanceArs(c), 'ARS')} − pagos {formatMoney(paid, 'ARS')}
+                                  </p>
+                                )}
+                                {ign.payments.length > 0 && (
+                                  <p className="text-[10px] text-amber-700">
+                                    {ign.payments.length === 1 ? '1 pago' : `${ign.payments.length} pagos`} por {formatMoney(ign.total, 'ARS')} no se descuenta{ign.payments.length === 1 ? '' : 'n'}:{' '}
+                                    {ign.base ? `es de fecha igual o anterior al resumen (${fmtDate(ign.base)}), o sea que pagó el resumen anterior.` : 'esta tarjeta todavía no tiene fecha de resumen. Importá el resumen o cargá el saldo.'}
                                   </p>
                                 )}
                                 {plans.map(pl => {

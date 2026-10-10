@@ -9,10 +9,11 @@ import NetWorthPanel from './NetWorthPanel';
 import Goals from './Goals';
 import Rules from './Rules';
 import Reports from './Reports';
+import Evolution from './Evolution';
 import Rubros from './Rubros';
 import Sharing, { SharingProps } from './Sharing';
 
-export type Tab = 'presupuestos' | 'vencimientos' | 'recurrentes' | 'cuotas' | 'patrimonio' | 'metas' | 'reglas' | 'rubros' | 'reportes' | 'compartir';
+export type Tab = 'presupuestos' | 'vencimientos' | 'recurrentes' | 'cuotas' | 'patrimonio' | 'metas' | 'reglas' | 'rubros' | 'evolucion' | 'reportes' | 'compartir';
 
 const TABS: { id: Tab; label: string; readOnlyOk: boolean }[] = [
   { id: 'presupuestos', label: 'Presupuestos', readOnlyOk: false },
@@ -23,6 +24,7 @@ const TABS: { id: Tab; label: string; readOnlyOk: boolean }[] = [
   { id: 'metas', label: 'Metas', readOnlyOk: false },
   { id: 'reglas', label: 'Reglas', readOnlyOk: false },
   { id: 'rubros', label: 'Rubros', readOnlyOk: false },
+  { id: 'evolucion', label: 'Evolución', readOnlyOk: true },
   { id: 'reportes', label: 'Reportes', readOnlyOk: true },
   { id: 'compartir', label: 'Compartir', readOnlyOk: true },
 ];
@@ -53,6 +55,7 @@ export default function PlanningHub(props: SharingProps & { initialTab?: Tab }) 
       {active === 'metas' && <Goals {...props} />}
       {active === 'reglas' && <Rules {...props} />}
       {active === 'rubros' && <Rubros {...props} />}
+      {active === 'evolucion' && <Evolution {...props} />}
       {active === 'reportes' && <Reports {...props} />}
       {active === 'compartir' && <Sharing {...props} />}
     </div>

@@ -23,6 +23,7 @@ import { buildCategories, categoryLabel } from '@/lib/categories';
 import { suggestRuleKeyword, ruleCovers } from '@/lib/rules';
 import { accountKey, suggestTransferPairs } from '@/lib/transfers';
 import { LEGAL } from '@/lib/legal';
+import { addMonths, cardPlansPending, nextInstallment, outstandingArs, paidSinceBase, planSchedule, type CardPlan } from '@/lib/cards';
 import { EMPTY_FILTER, filterHistory, isFilterActive, toCsv, type HistoryFilter } from '@/lib/history';
 import { needsOwnTransferFix, FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
 import { generateDueRecurring, saveNetWorthSnapshot } from '@/lib/planning-client';
@@ -248,6 +249,12 @@ export default function FinanzasDRMIA() {
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>(EMPTY_FILTER);
   const [historyLimit, setHistoryLimit] = useState(50);
+  const [cardPlans, setCardPlans] = useState<CardPlan[]>([]);
+  const [planModal, setPlanModal] = useState<{ cardId: string } | null>(null);
+  const [planAmount, setPlanAmount] = useState('');
+  const [planPayments, setPlanPayments] = useState('3');
+  const [planFirstDue, setPlanFirstDue] = useState('');
+  const [planSaving, setPlanSaving] = useState(false);
   const [welcomeHidden, setWelcomeHidden] = useState(() => {
     try { return localStorage.getItem('drm-welcome-hidden') === '1'; } catch { return false; }
   });
@@ -537,7 +544,7 @@ export default function FinanzasDRMIA() {
       const tables: [string, string][] = [
         ['transactions', 'user_id'], ['credit_cards', 'user_id'], ['loans', 'user_id'], ['budgets', 'user_id'],
         ['recurring_items', 'user_id'], ['savings_goals', 'user_id'], ['category_rules', 'user_id'],
-        ['net_worth_snapshots', 'user_id'], ['user_categories', 'user_id'],
+        ['net_worth_snapshots', 'user_id'], ['user_categories', 'user_id'], ['card_plans', 'user_id'],
       ];
       const out: Record<string, any> = { exportado_el: new Date().toISOString(), cuenta: { email: user.email, id: user.id } };
       for (const [table, col] of tables) {
@@ -757,6 +764,9 @@ export default function FinanzasDRMIA() {
     }
     if (cardsRes.data) setCreditCards(cardsRes.data);
     if (loansRes.data) setLoans(loansRes.data);
+    // Plan Z / cuotas sin interés: si la migración 014 todavía no se corrió, simplemente no hay planes.
+    const plansRes = await supabase.from('card_plans').select('*').eq('user_id', userId);
+    setCardPlans(!plansRes.error && plansRes.data ? plansRes.data : []);
   }
 
   // Cambia entre mis datos y los datos que otra persona compartió conmigo (solo lectura).
@@ -873,7 +883,7 @@ export default function FinanzasDRMIA() {
     setMovSelected([]);
     setMovMonth(selectedMonth);
     // Si todavía no hay movimientos asignados a esta tarjeta/billetera, mostrar todos
-    const hasLinked = transactions.some(t => (kind === 'card' ? t.credit_card_id : t.loan_id) === id);
+    const hasLinked = transactions.some(t => (kind === 'card' ? t.credit_card_id : t.loan_id) === id || t.transfer_account === `${kind}:${id}`);
     setMovScope(hasLinked ? 'linked' : 'all');
     setMovementsEntity({ kind, id, name });
   }
@@ -1026,7 +1036,7 @@ export default function FinanzasDRMIA() {
     setEditCardName(card.name);
     setEditCardClosing(String(card.closing_day || '20'));
     setEditCardDue(String(card.due_day || '5'));
-    setEditCardLimitArs(String(cardBalanceArs(card)));
+    setEditCardLimitArs(String(outstandingArs(card, transactions)));
     setEditCardLimitUsd(String(card.balance_usd || '0'));
     setIsEditCardModalOpen(true);
   }
@@ -1077,18 +1087,25 @@ export default function FinanzasDRMIA() {
     e.preventDefault();
     if (!editingCardId || !user) return;
 
-    const { error } = await supabase
-      .from('credit_cards')
-      .update({
-        name: editCardName,
-        closing_day: parseInt(editCardClosing),
-        due_day: parseInt(editCardDue),
-        balance_ars: parseFloat(editCardLimitArs || '0'),
-        balance_usd: parseFloat(editCardLimitUsd || '0'),
-        credit_limit: parseFloat(editCardLimitArs || '0')
-      })
-      .eq('id', editingCardId)
-      .eq('user_id', user.id);
+    const cardBefore = creditCards.find(c => c.id === editingCardId);
+    // Si cambiaste el saldo a mano, los pagos se descuentan recién desde hoy (el saldo nuevo ya los considera).
+    const balanceChanged = !cardBefore || Math.abs(parseFloat(editCardLimitArs || '0') - outstandingArs(cardBefore, transactions)) > 0.005;
+    const patch: Record<string, any> = {
+      name: editCardName,
+      closing_day: parseInt(editCardClosing),
+      due_day: parseInt(editCardDue),
+      balance_usd: parseFloat(editCardLimitUsd || '0'),
+    };
+    // Si el saldo no cambió, no se toca (lo que se ve ya tiene los pagos descontados).
+    if (balanceChanged) {
+      patch.balance_ars = parseFloat(editCardLimitArs || '0');
+      patch.credit_limit = parseFloat(editCardLimitArs || '0');
+    }
+    let { error } = await supabase.from('credit_cards').update(balanceChanged ? { ...patch, balance_date: todayLocal() } : patch)
+      .eq('id', editingCardId).eq('user_id', user.id);
+    if (error && balanceChanged) {
+      ({ error } = await supabase.from('credit_cards').update(patch).eq('id', editingCardId).eq('user_id', user.id));
+    }
 
     if (error) {
       alert('No se pudo actualizar la tarjeta: ' + error.message);
@@ -1277,6 +1294,62 @@ export default function FinanzasDRMIA() {
     if (!user) return;
     const { error } = await supabase.from('transactions').update({ transfer_account: key || null }).eq('id', id).eq('user_id', user.id);
     if (error) { alert('No se pudo guardar (¿corriste la migración 006?): ' + error.message); return; }
+    await refreshAll(user.id);
+    // Pago a una tarjeta Naranja: ofrecer registrar lo que quedó financiado en Plan Z.
+    if (key.startsWith('card:')) {
+      const card = creditCards.find(c => `card:${c.id}` === key);
+      if (card && /naranja/i.test(card.name)) {
+        const { data } = await supabase.from('transactions').select('*').eq('user_id', user.id);
+        const left = outstandingArs(card, data || transactions);
+        if (left > 0.5 && cardPlans.every(pl => pl.credit_card_id !== card.id || !nextInstallment(pl, todayLocal()))) {
+          if (confirm(`Después de este pago le quedan ${formatMoney(left, 'ARS')} a ${card.name}.\n\n¿Pasaste ese saldo a Plan Z (1, 2 o 3 pagos sin interés)? Aceptá para registrarlo.`)) openPlanModal(card.id, left);
+        }
+      }
+    }
+  }
+
+  function openPlanModal(cardId: string, suggested?: number) {
+    const card = creditCards.find(c => c.id === cardId);
+    const left = suggested ?? Math.max(0, card ? outstandingArs(card, transactions) : 0);
+    setPlanAmount(left > 0 ? String(left) : '');
+    setPlanPayments('3');
+    // Primer vencimiento: el mes siguiente al del último resumen (o el próximo día de vencimiento de la tarjeta).
+    let due = '';
+    if (card?.last_statement_due) due = addMonths(card.last_statement_due, 1);
+    else {
+      const t = todayLocal();
+      const day = String(card?.due_day || 10).padStart(2, '0');
+      due = addMonths(`${t.slice(0, 7)}-${day}`, t.slice(8, 10) > day ? 1 : 0);
+      if (due <= t) due = addMonths(due, 1);
+    }
+    setPlanFirstDue(due);
+    setPlanModal({ cardId });
+  }
+
+  async function saveCardPlan(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user || !planModal) return;
+    const amount = parseFloat(planAmount);
+    const payments = parseInt(planPayments);
+    if (!(amount > 0) || !(payments >= 1 && payments <= 3) || !/^\d{4}-\d{2}-\d{2}$/.test(planFirstDue)) {
+      alert('Revisá el monto, la cantidad de pagos y la fecha del primer vencimiento.');
+      return;
+    }
+    setPlanSaving(true);
+    const { error } = await supabase.from('card_plans').insert([{
+      user_id: user.id, credit_card_id: planModal.cardId, label: 'Plan Z',
+      total_amount: amount, payments, first_due: planFirstDue,
+    }]);
+    setPlanSaving(false);
+    if (error) { alert('No se pudo guardar el plan (¿corriste la migración 014?): ' + error.message); return; }
+    setPlanModal(null);
+    await refreshAll(user.id);
+  }
+
+  async function deleteCardPlan(id: string) {
+    if (!user || !confirm('¿Quitar este plan de cuotas? No borra ningún movimiento.')) return;
+    const { error } = await supabase.from('card_plans').delete().eq('id', id).eq('user_id', user.id);
+    if (error) { alert('No se pudo quitar: ' + error.message); return; }
     await refreshAll(user.id);
   }
 
@@ -1570,6 +1643,10 @@ export default function FinanzasDRMIA() {
       // Guarda el saldo y la fecha del resumen. Si la columna de fecha todavía no existe (migración 011), guarda solo el saldo.
       const saveBalance = async (table: 'credit_cards' | 'loans', id: string, upd: Record<string, any>, extra: Record<string, any>) => {
         let r = await supabase.from(table).update({ ...upd, ...extra }).eq('id', id).eq('user_id', currentSessionUser.id);
+        if (r.error && 'balance_date' in extra) {
+          const { balance_date: _omit, ...withoutDate } = extra; // migración 014 pendiente
+          r = await supabase.from(table).update({ ...upd, ...withoutDate }).eq('id', id).eq('user_id', currentSessionUser.id);
+        }
         if (r.error && Object.keys(extra).length > 0) r = await supabase.from(table).update(upd).eq('id', id).eq('user_id', currentSessionUser.id);
         return r.error;
       };
@@ -1588,7 +1665,7 @@ export default function FinanzasDRMIA() {
           if (Object.keys(upd).length > 0) balanceWarning = `\n\nEste resumen cerró el ${fmtDate(closeDate)} y ya tenías cargado uno más nuevo (cierre ${fmtDate(prevClose)}). Guardé los movimientos, pero NO cambié la deuda de la tarjeta.`;
         } else if (Object.keys(upd).length > 0) {
           const balError = await saveBalance('credit_cards', assignedCardId, upd,
-            { last_statement_close: closeDate, last_statement_due: migrationData.statement_due_date || null });
+            { last_statement_close: closeDate, last_statement_due: migrationData.statement_due_date || null, balance_date: closeDate });
           if (balError) balanceWarning = '\n\nAtención: los movimientos se guardaron pero no se pudo actualizar el saldo de la tarjeta (' + balError.message + ').';
         }
       }
@@ -1701,9 +1778,14 @@ export default function FinanzasDRMIA() {
   const loansMonthlyArs = useMemo(() => loansList.reduce((a, l) => a + Number(l.installment_amount || 0), 0), [loansList]);
 
   // Deuda de tarjetas: ARS y USD por separado para mostrar, y consolidada para los KPIs.
+  // Tarjetas con el saldo "a pagar hoy": el del resumen menos los pagos hechos desde billeteras/cuentas.
+  const creditCardsEff = useMemo(
+    () => creditCards.map(c => ({ ...c, balance_ars: outstandingArs(c, transactions) })),
+    [creditCards, transactions]
+  );
   const totalDebtArs = useMemo(() => {
-    return creditCards.reduce((acc, c) => acc + cardBalanceArs(c), 0);
-  }, [creditCards]);
+    return creditCardsEff.reduce((acc, c) => acc + cardBalanceArs(c), 0);
+  }, [creditCardsEff]);
 
   const totalDebtUsd = useMemo(() => {
     return creditCards.reduce((acc, c) => acc + Number(c.balance_usd || 0), 0);
@@ -2389,7 +2471,7 @@ export default function FinanzasDRMIA() {
               viewingOwnerId={viewingOwner?.id || null}
               onViewOwner={switchViewOwner}
               transactions={transactions}
-              creditCards={creditCards}
+              creditCards={creditCardsEff}
               loans={loans}
               profile={profileType}
               usdRate={usdRate}
@@ -2446,7 +2528,7 @@ export default function FinanzasDRMIA() {
             ownUserId={user.id}
             readOnly={!!viewingOwner}
             transactions={transactions}
-            creditCards={creditCards}
+            creditCards={creditCardsEff}
             loans={loans}
             profile={profileType}
             usdRate={usdRate}
@@ -2627,9 +2709,41 @@ export default function FinanzasDRMIA() {
                         
                         {/* Saldos Bimonetarios: Ambos siempre visibles */}
                         <div className="mt-1 space-y-0.5 pt-1 border-t border-slate-100">
-                          <p className="text-[11px] font-bold text-rose-600">
-                            Deuda ARS: {formatMoney(cardBalanceArs(c), 'ARS')}
-                          </p>
+                          {(() => {
+                            const eff = outstandingArs(c, transactions);
+                            const paid = paidSinceBase(c, transactions);
+                            const today = todayLocal();
+                            const plans = cardPlans.filter(pl => pl.credit_card_id === c.id && nextInstallment(pl, today));
+                            const zPending = cardPlansPending(c.id, cardPlans, today);
+                            return (
+                              <>
+                                <p className={`text-[11px] font-bold ${eff < 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                  Deuda ARS: {formatMoney(eff, 'ARS')}{eff < 0 ? ' (a favor)' : ''}
+                                </p>
+                                {paid > 0 && (
+                                  <p className="text-[10px] text-slate-500">
+                                    Resumen {formatMoney(cardBalanceArs(c), 'ARS')} − pagos {formatMoney(paid, 'ARS')}
+                                  </p>
+                                )}
+                                {plans.map(pl => {
+                                  const nx = nextInstallment(pl, today)!;
+                                  const sch = planSchedule(pl, today);
+                                  return (
+                                    <p key={pl.id} className="text-[10px] text-violet-700 flex items-center gap-1 flex-wrap">
+                                      <span>🔁 {pl.label || 'Plan Z'}: cuota {nx.n} de {sch.length} · {formatMoney(nx.amount, 'ARS')} · vence {fmtDate(nx.due)}</span>
+                                      <button onClick={() => deleteCardPlan(pl.id)} className="underline text-slate-400 hover:text-red-500 cursor-pointer">quitar</button>
+                                    </p>
+                                  );
+                                })}
+                                {zPending > 0 && eff > 0 && (
+                                  <p className="text-[10px] text-violet-700">De la deuda, {formatMoney(Math.min(zPending, eff), 'ARS')} está financiado sin interés</p>
+                                )}
+                                <button onClick={() => openPlanModal(c.id)} className="text-[10px] text-violet-700 underline underline-offset-2 cursor-pointer">
+                                  + Registrar Plan Z / cuotas sin interés
+                                </button>
+                              </>
+                            );
+                          })()}
                           {c.last_statement_close && (
                             <p className="text-[10px] text-slate-400">Resumen al {fmtDate(c.last_statement_close)}{c.last_statement_due ? ` · vence ${fmtDate(c.last_statement_due)}` : ''}</p>
                           )}
@@ -3227,6 +3341,42 @@ export default function FinanzasDRMIA() {
       </div>
 
       {/* MODAL: EDITAR TARJETA CON SALDOS EN ARS Y USD */}
+      {planModal && (() => {
+        const card = creditCards.find(c => c.id === planModal.cardId);
+        const amt = parseFloat(planAmount) || 0;
+        const n = parseInt(planPayments) || 1;
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <form onSubmit={saveCardPlan} className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-3 border border-slate-100">
+              <div className="flex justify-between items-start gap-3">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Plan Z · {card?.name}</h3>
+                  <p className="text-[11px] text-slate-500">Lo que pasaste a pagar en 1, 2 o 3 pagos sin interés. Queda como cuotas pendientes de la tarjeta.</p>
+                </div>
+                <button type="button" onClick={() => setPlanModal(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              </div>
+              <label className="block text-xs text-slate-600">Monto financiado ($)
+                <input type="number" step="0.01" min="0" value={planAmount} onChange={e => setPlanAmount(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-xl p-2.5 text-sm outline-none" required />
+              </label>
+              <label className="block text-xs text-slate-600">¿En cuántos pagos?
+                <select value={planPayments} onChange={e => setPlanPayments(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-xl p-2.5 text-sm bg-white">
+                  <option value="1">1 pago</option>
+                  <option value="2">2 pagos</option>
+                  <option value="3">3 pagos</option>
+                </select>
+              </label>
+              <label className="block text-xs text-slate-600">Vencimiento del primer pago
+                <input type="date" value={planFirstDue} onChange={e => setPlanFirstDue(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-xl p-2.5 text-sm outline-none" required />
+              </label>
+              {amt > 0 && <p className="text-[11px] text-violet-700 bg-violet-50 rounded-xl p-2.5">{n} {n === 1 ? 'pago' : 'pagos'} de aprox. {formatMoney(Math.round((amt / n) * 100) / 100, 'ARS')}, uno por mes.</p>}
+              <button type="submit" disabled={planSaving} className="w-full bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs py-2.5 rounded-xl cursor-pointer disabled:opacity-50">
+                {planSaving ? 'Guardando…' : 'Guardar plan'}
+              </button>
+            </form>
+          </div>
+        );
+      })()}
+
       {isEditCardModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white w-full max-w-sm rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
@@ -3664,9 +3814,12 @@ export default function FinanzasDRMIA() {
 
       {/* MODAL: MOVIMIENTOS DE UNA TARJETA / BILLETERA (pasar a Negocio o a Personal) */}
       {movementsEntity && (() => {
+        const entKey = `${movementsEntity.kind}:${movementsEntity.id}`;
+        // Movimiento "espejo": se registró en OTRA cuenta (ej. la billetera que pagó el resumen) pero apunta a esta.
+        const isMirror = (t: any) => t.transfer_account === entKey && accountKeyOf(t) !== entKey;
         const rows = transactions
           .filter(t => {
-            const linked = (movementsEntity.kind === 'card' ? t.credit_card_id : t.loan_id) === movementsEntity.id;
+            const linked = (movementsEntity.kind === 'card' ? t.credit_card_id : t.loan_id) === movementsEntity.id || isMirror(t);
             const unassigned = !t.credit_card_id && !t.loan_id;
             const scopeOk = movScope === 'all' ? true : movScope === 'linked' ? linked : unassigned;
             return scopeOk && (movMonth === 'all' || (t.date && t.date.startsWith(movMonth)));
@@ -3745,8 +3898,12 @@ export default function FinanzasDRMIA() {
                   <p className="text-xs text-slate-400 text-center py-8">No hay movimientos en este período.</p>
                 ) : rows.map(t => {
                   const biz = isBusinessDesc(t.description);
-                  const isIn = t.type === 'income';
-                  const label = t.operation_type === 'transfer' ? (isFxTx(t) ? fxLabel(t) : 'Transferencia propia') : isTransfer(t) ? 'Pago de tarjeta' : isRefund(t) ? 'Reintegro' : null;
+                  const mirror = isMirror(t);
+                  // Visto desde esta cuenta, lo que salió de la otra entró acá (y al revés).
+                  const isIn = mirror ? t.type !== 'income' : t.type === 'income';
+                  const label = mirror
+                    ? (movementsEntity.kind === 'card' && t.type === 'expense' ? 'Pago recibido' : isIn ? 'Transferencia recibida' : 'Transferencia enviada')
+                    : t.operation_type === 'transfer' ? (isFxTx(t) ? fxLabel(t) : 'Transferencia propia') : isTransfer(t) ? 'Pago de tarjeta' : isRefund(t) ? 'Reintegro' : null;
                   return (
                     <div key={t.id} className={`p-2.5 border rounded-xl flex items-center gap-2.5 text-xs ${biz ? 'bg-indigo-50/50 border-indigo-100' : 'bg-slate-50 border-slate-100'}`}>
                       <input
@@ -3760,7 +3917,8 @@ export default function FinanzasDRMIA() {
                           <span className="font-mono">{t.date}</span>
                           {t.category && <span>• {t.category}</span>}
                           {label && <span className="text-amber-600 font-semibold">• {label}</span>}
-                          {(t.operation_type === 'transfer' || t.operation_type === 'payment') && (
+                          {mirror && <span className="text-violet-700 font-semibold">↔ desde {accountName(accountKeyOf(t)) || 'otra cuenta'}</span>}
+                          {!mirror && (t.operation_type === 'transfer' || t.operation_type === 'payment') && (
                             <select
                               value={t.transfer_account || ''}
                               onChange={e => setTransferAccount(t.id, e.target.value)}
@@ -4350,7 +4508,7 @@ export default function FinanzasDRMIA() {
               <p>Tu deuda consolidada activa es de: <strong className="text-rose-400 text-sm">{formatMoney(totalDebtArs, 'ARS')}</strong></p>
               <div className="p-4 bg-[#132238] rounded-2xl border border-slate-700 space-y-2">
                 <span className="font-bold text-[#00D7FF]">Método bola de nieve: pagá primero el saldo más chico y sumá esa cuota al siguiente.</span>
-                {[...creditCards].sort((a, b) => cardBalanceArs(a) - cardBalanceArs(b)).map((c, i) => (
+                {[...creditCardsEff].sort((a, b) => cardBalanceArs(a) - cardBalanceArs(b)).map((c, i) => (
                   <div key={c.id} className="flex justify-between items-center p-2.5 bg-slate-900/80 rounded-xl border border-slate-800">
                     <span>{i + 1}. {c.name} (Vence día {c.due_day})</span>
                     <span className="font-bold text-rose-400">

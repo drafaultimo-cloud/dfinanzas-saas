@@ -17,6 +17,7 @@ const OWN_TABLES: [string, string][] = [
   ['net_worth_snapshots', 'user_id'],
   ['reminder_prefs', 'user_id'],
   ['user_categories', 'user_id'],
+  ['card_plans', 'user_id'],
   ['ai_usage', 'user_id'],
   ['shares', 'owner_id'],
   ['user_support_chats', 'sender_id'],

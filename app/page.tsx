@@ -839,12 +839,21 @@ export default function FinanzasDRMIA() {
       category: transType === 'expense' || isReimb ? category : 'Ingreso',
       income_source: transType === 'income' ? incomeSource : null,
       credit_card_id: transType === 'expense' && selectedCardId ? selectedCardId : null,
-      loan_id: transType === 'expense' && selectedLoanId ? selectedLoanId : null,
+      loan_id: selectedLoanId && !(transType === 'expense' && selectedCardId) ? selectedLoanId : null,
       date: customDate || todayLocal()
     };
 
     const { error } = await supabase.from('transactions').insert([payload]);
     if (!error) {
+      // Si se pagó/cobró con una billetera o efectivo, el dinero disponible sube o baja en el acto.
+      const w = payload.loan_id ? loans.find(l => l.id === payload.loan_id) : null;
+      if (w && loanKind(w) !== 'loan') {
+        const sign = transType === 'income' || isReimb ? 1 : -1;
+        const col = manualCurrency === 'USD' ? 'balance_usd' : 'balance_ars';
+        const next = Math.round((Number(w[col] || 0) + sign * payload.amount) * 100) / 100;
+        const { error: wErr } = await supabase.from('loans').update({ [col]: next }).eq('id', w.id).eq('user_id', user.id);
+        if (wErr) alert('Se guardó el movimiento, pero no se pudo actualizar el saldo de ' + w.entity + ': ' + wErr.message);
+      }
       setAmount('');
       setDescription('');
       setSelectedCardId('');
@@ -3035,16 +3044,31 @@ export default function FinanzasDRMIA() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500">Imputar a Tarjeta (opcional)</label>
-                  <select 
-                    value={selectedCardId} 
-                    onChange={e => setSelectedCardId(e.target.value)}
+                  <label className="text-xs text-slate-500">{transType === 'expense' ? 'Pagado con (opcional)' : 'Cobrado en (opcional)'}</label>
+                  <select
+                    value={selectedCardId ? `card:${selectedCardId}` : selectedLoanId ? `loan:${selectedLoanId}` : ''}
+                    onChange={e => {
+                      const [k, id] = e.target.value.split(':');
+                      setSelectedCardId(k === 'card' ? id : '');
+                      setSelectedLoanId(k === 'loan' ? id : '');
+                    }}
                     className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none bg-white text-slate-700"
                   >
-                    <option value="">Ninguna / Débito</option>
-                    {creditCards.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
+                    <option value="">{transType === 'expense' ? 'Ninguna / Débito' : 'Ninguna'}</option>
+                    {walletsList.length > 0 && (
+                      <optgroup label="Efectivo y billeteras">
+                        {walletsList.map(l => (
+                          <option key={l.id} value={`loan:${l.id}`}>{loanKind(l) === 'cash' ? '💵 ' : ''}{l.entity}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {transType === 'expense' && creditCards.length > 0 && (
+                      <optgroup label="Tarjetas de crédito">
+                        {creditCards.map(c => (
+                          <option key={c.id} value={`card:${c.id}`}>{c.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </div>
               </div>

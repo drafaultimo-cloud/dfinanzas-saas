@@ -6,6 +6,7 @@ export type CardLike = {
   credit_limit?: number | string | null;
   balance_date?: string | null;
   last_statement_close?: string | null;
+  closing_day?: number | string | null;
 };
 export type PayTx = {
   type?: string;
@@ -30,7 +31,21 @@ export type CardPlan = {
 export const statedBalanceArs = (c: CardLike): number => Number(c.balance_ars ?? c.credit_limit ?? 0);
 
 /** Desde cuándo valen los pagos: la fecha del saldo, o el cierre del último resumen. Vacío = no se descuenta. */
-export const baseDate = (c: CardLike): string => c.balance_date || c.last_statement_close || '';
+export const baseDate = (c: CardLike, today: string = localIso(new Date())): string =>
+  c.balance_date || c.last_statement_close || previousClose(c.closing_day, today);
+
+const localIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** Último día de cierre ya pasado (hoy o antes) según el "día de cierre" de la tarjeta. Vacío si no se cargó. */
+export function previousClose(closingDay: number | string | null | undefined, today: string): string {
+  const d = Number(closingDay);
+  if (!d || d < 1 || d > 31) return '';
+  const [y, m, td] = today.split('-').map(Number);
+  let yy = y, mm = m;                                   // mes 1-12
+  const clamp = (yr: number, mo: number) => Math.min(d, new Date(Date.UTC(yr, mo, 0)).getUTCDate());
+  if (clamp(yy, mm) > td) { mm -= 1; if (mm === 0) { mm = 12; yy -= 1; } }
+  return `${yy}-${String(mm).padStart(2, '0')}-${String(clamp(yy, mm)).padStart(2, '0')}`;
+}
 
 /**
  * Pagos hechos DESDE OTRA cuenta (billetera, caja de ahorro…) hacia esta tarjeta, posteriores a la fecha base.

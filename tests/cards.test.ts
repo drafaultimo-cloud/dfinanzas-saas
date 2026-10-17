@@ -51,3 +51,15 @@ test('pagos ignorados: anteriores al resumen o sin fecha base', () => {
   assert.equal(r.total, 100);
   assert.equal(ignoredPayments({ id: 'c1' }, [pay('2026-10-13')]).payments.length, 1);
 });
+
+import { previousClose } from '../lib/cards';
+test('sin fecha de resumen se usa el último día de cierre', () => {
+  assert.equal(previousClose(27, '2026-10-16'), '2026-09-27');
+  assert.equal(previousClose(10, '2026-10-16'), '2026-10-10');
+  assert.equal(previousClose(31, '2026-03-05'), '2026-02-28');
+  assert.equal(previousClose(27, '2026-01-10'), '2025-12-27');
+  assert.equal(previousClose(null, '2026-10-16'), '');
+  const nx = { id: 'c1', balance_ars: 427471.89, closing_day: 27 };
+  const pay = (date: string, amount: number) => ({ type: 'expense', operation_type: 'payment', amount, date, transfer_account: 'card:c1', loan_id: 'w' });
+  assert.equal(outstandingArs(nx, [pay('2026-10-10', 262846.71), pay('2026-10-02', 141742.51)]), 22882.67);
+});

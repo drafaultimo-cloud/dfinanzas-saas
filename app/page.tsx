@@ -23,6 +23,7 @@ import { buildCategories, categoryLabel } from '@/lib/categories';
 import { suggestRuleKeyword, ruleCovers } from '@/lib/rules';
 import { accountKey, suggestTransferPairs } from '@/lib/transfers';
 import { LEGAL } from '@/lib/legal';
+import { walletBalance, walletBase, walletDelta } from '@/lib/wallets';
 import { addMonths, cardPlansPending, nextInstallment, ignoredPayments, outstandingArs, paidSinceBase, planSchedule, type CardPlan } from '@/lib/cards';
 import { EMPTY_FILTER, filterHistory, isFilterActive, toCsv, type HistoryFilter } from '@/lib/history';
 import { needsOwnTransferFix, FX_CATEGORY, fxLabel, isFxTx, needsFxFix } from '@/lib/fx';
@@ -845,15 +846,6 @@ export default function FinanzasDRMIA() {
 
     const { error } = await supabase.from('transactions').insert([payload]);
     if (!error) {
-      // Si se pagó/cobró con una billetera o efectivo, el dinero disponible sube o baja en el acto.
-      const w = payload.loan_id ? loans.find(l => l.id === payload.loan_id) : null;
-      if (w && loanKind(w) !== 'loan') {
-        const sign = transType === 'income' || isReimb ? 1 : -1;
-        const col = manualCurrency === 'USD' ? 'balance_usd' : 'balance_ars';
-        const next = Math.round((Number(w[col] || 0) + sign * payload.amount) * 100) / 100;
-        const { error: wErr } = await supabase.from('loans').update({ [col]: next }).eq('id', w.id).eq('user_id', user.id);
-        if (wErr) alert('Se guardó el movimiento, pero no se pudo actualizar el saldo de ' + w.entity + ': ' + wErr.message);
-      }
       setAmount('');
       setDescription('');
       setSelectedCardId('');
@@ -1057,7 +1049,8 @@ export default function FinanzasDRMIA() {
     if (raw === null) return;
     const val = parseFloat(raw.replace(/\./g, '').replace(',', '.'));
     if (!Number.isFinite(val)) { alert('Número inválido.'); return; }
-    const { error } = await supabase.from('loans').update({ balance_ars: val }).eq('id', l.id).eq('user_id', user.id);
+    let { error } = await supabase.from('loans').update({ balance_ars: val, balance_date: todayLocal() }).eq('id', l.id).eq('user_id', user.id);
+    if (error) error = (await supabase.from('loans').update({ balance_ars: val }).eq('id', l.id).eq('user_id', user.id)).error; // migración 015 pendiente
     if (error) { alert('No se pudo guardar: ' + error.message); return; }
     refreshAll(user.id);
   }
@@ -1778,11 +1771,16 @@ export default function FinanzasDRMIA() {
   const netBalance = totalIncome - totalExpense;
 
   // Billeteras (digitales), efectivo y préstamos
-  const walletsList = useMemo(() => loans.filter(l => loanKind(l) !== 'loan'), [loans]);
-  const loansList = useMemo(() => loans.filter(l => loanKind(l) === 'loan'), [loans]);
-  const digitalAvailableArs = useMemo(() => loans.filter(l => loanKind(l) === 'wallet').reduce((a, l) => a + Number(l.balance_ars || 0), 0), [loans]);
-  const digitalAvailableUsd = useMemo(() => loans.filter(l => loanKind(l) === 'wallet').reduce((a, l) => a + Number(l.balance_usd || 0), 0), [loans]);
-  const cashAvailableArs = useMemo(() => loans.filter(l => loanKind(l) === 'cash').reduce((a, l) => a + Number(l.balance_ars || 0), 0), [loans]);
+  // Billeteras y efectivo con el saldo "de hoy": el cargado más lo que entró y salió después.
+  const loansEff = useMemo(
+    () => loans.map(l => loanKind(l) === 'loan' ? l : { ...l, balance_ars: walletBalance(l, transactions, 'ARS'), balance_usd: walletBalance(l, transactions, 'USD') }),
+    [loans, transactions]
+  );
+  const walletsList = useMemo(() => loansEff.filter(l => loanKind(l) !== 'loan'), [loansEff]);
+  const loansList = useMemo(() => loansEff.filter(l => loanKind(l) === 'loan'), [loansEff]);
+  const digitalAvailableArs = useMemo(() => loansEff.filter(l => loanKind(l) === 'wallet').reduce((a, l) => a + Number(l.balance_ars || 0), 0), [loansEff]);
+  const digitalAvailableUsd = useMemo(() => loansEff.filter(l => loanKind(l) === 'wallet').reduce((a, l) => a + Number(l.balance_usd || 0), 0), [loansEff]);
+  const cashAvailableArs = useMemo(() => loansEff.filter(l => loanKind(l) === 'cash').reduce((a, l) => a + Number(l.balance_ars || 0), 0), [loansEff]);
   const loansDebtArs = useMemo(() => loansList.reduce((a, l) => a + Math.max(0, Number(l.total_amount || 0)), 0), [loansList]);
   const loansMonthlyArs = useMemo(() => loansList.reduce((a, l) => a + Number(l.installment_amount || 0), 0), [loansList]);
 
@@ -2481,7 +2479,7 @@ export default function FinanzasDRMIA() {
               onViewOwner={switchViewOwner}
               transactions={transactions}
               creditCards={creditCardsEff}
-              loans={loans}
+              loans={loansEff}
               profile={profileType}
               usdRate={usdRate}
               onChanged={() => refreshAll(user.id)}
@@ -2538,7 +2536,7 @@ export default function FinanzasDRMIA() {
             readOnly={!!viewingOwner}
             transactions={transactions}
             creditCards={creditCardsEff}
-            loans={loans}
+            loans={loansEff}
             profile={profileType}
             usdRate={usdRate}
             onChanged={() => {}}
@@ -2738,7 +2736,7 @@ export default function FinanzasDRMIA() {
                                 {ign.payments.length > 0 && (
                                   <p className="text-[10px] text-amber-700">
                                     {ign.payments.length === 1 ? '1 pago' : `${ign.payments.length} pagos`} por {formatMoney(ign.total, 'ARS')} no se descuenta{ign.payments.length === 1 ? '' : 'n'}:{' '}
-                                    {ign.base ? `es de fecha igual o anterior al resumen (${fmtDate(ign.base)}), o sea que pagó el resumen anterior.` : 'esta tarjeta todavía no tiene fecha de resumen. Importá el resumen o cargá el saldo.'}
+                                    {ign.base ? `es de fecha igual o anterior al último cierre (${fmtDate(ign.base)}), o sea que pagó el resumen anterior.` : 'cargá el día de cierre de la tarjeta o importá el resumen.'}
                                   </p>
                                 )}
                                 {plans.map(pl => {
@@ -2863,6 +2861,12 @@ export default function FinanzasDRMIA() {
                         </div>
                         <div className="mt-0.5 space-y-0.5">
                           <p className="text-[11px] font-bold text-emerald-700">{isCash ? 'Efectivo' : 'Saldo en cuenta'}: {formatMoney(Number(l.balance_ars || 0), 'ARS')}</p>
+                          {(() => {
+                            const base = walletBase(l);
+                            if (!base) return <p className="text-[10px] text-slate-400">Tocá “Ajustar” una vez con el saldo real y desde ahí los movimientos suman y restan solos.</p>;
+                            const d = walletDelta(l, transactions, 'ARS');
+                            return d !== 0 ? <p className="text-[10px] text-slate-500">Saldo al {fmtDate(base)} {formatMoney(Number(l.balance_ars || 0) - d, 'ARS')} {d > 0 ? '+' : '−'} movimientos nuevos {formatMoney(Math.abs(d), 'ARS')}</p> : null;
+                          })()}
                           {l.balance_usd !== null && l.balance_usd !== undefined && Number(l.balance_usd) !== 0 && (
                             <p className="text-[11px] font-bold text-emerald-700">Saldo USD: {formatMoney(Number(l.balance_usd), 'USD')}</p>
                           )}
@@ -2890,6 +2894,11 @@ export default function FinanzasDRMIA() {
                         >
                           <FileUp className="w-3 h-3 text-amber-600" />
                           Importar Movimientos del Mes
+                        </button>
+                      )}
+                      {!isCash && (
+                        <button onClick={() => adjustLoanBalance(l)} className="text-[10px] text-slate-500 hover:text-amber-700 underline underline-offset-2 text-left cursor-pointer">
+                          Ajustar saldo a mano
                         </button>
                       )}
                     </div>

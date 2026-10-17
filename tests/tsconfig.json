@@ -10,5 +10,5 @@
     "rootDir": "..",
     "types": ["node"]
   },
-  "include": ["./*.test.ts", "../lib/fx.ts", "../lib/planning.ts", "../lib/categories.ts", "../lib/statement.ts", "../lib/transfers.ts", "../lib/rules.ts", "../lib/history.ts", "../lib/cards.ts", "../lib/evolution.ts", "../lib/forecast.ts", "../lib/realterms.ts", "../lib/spending.ts", "../lib/wallets.ts", "../lib/safespend.ts", "../lib/health.ts", "../lib/demo.ts", "../lib/referral.ts", "../lib/digest.ts", "../lib/access.ts"]
+  "include": ["./*.test.ts", "../lib/fx.ts", "../lib/planning.ts", "../lib/categories.ts", "../lib/statement.ts", "../lib/transfers.ts", "../lib/rules.ts", "../lib/history.ts", "../lib/cards.ts", "../lib/evolution.ts", "../lib/forecast.ts", "../lib/realterms.ts", "../lib/spending.ts", "../lib/wallets.ts", "../lib/safespend.ts", "../lib/health.ts", "../lib/demo.ts", "../lib/referral.ts", "../lib/authErrors.ts", "../lib/digest.ts", "../lib/access.ts"]
 }

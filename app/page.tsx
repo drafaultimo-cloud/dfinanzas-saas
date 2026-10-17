@@ -20,6 +20,7 @@ import { buildDemoData, createDemoClient, DEMO_MESSAGE, DEMO_USER, isDemoActive,
 import HomeCards from '@/components/planning/HomeCards';
 import ReferralCard from '@/components/planning/ReferralCard';
 import EmailPrefs from '@/components/planning/EmailPrefs';
+import { checkNewPassword, translateAuthError } from '@/lib/authErrors';
 import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip';
 import CategorySelect, { saveUserCategory } from '@/components/CategorySelect';
 import { isOlderStatement, reconcileTotal, statementCloseDate } from '@/lib/statement';
@@ -162,7 +163,12 @@ export default function FinanzasDRMIA() {
   const [loading, setLoading] = useState(true);
   const [demoMode, setDemoMode] = useState(false);
   const exitDemoRef = useRef<() => void>(() => {});
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [needsConfirm, setNeedsConfirm] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [newPass, setNewPass] = useState('');
+  const [newPass2, setNewPass2] = useState('');
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [accountBusy, setAccountBusy] = useState(false);
@@ -554,9 +560,15 @@ export default function FinanzasDRMIA() {
     setAuthLoading(true);
     setAuthError('');
     setAuthSuccess('');
+    setNeedsConfirm(false);
 
     try {
-      if (authMode === 'login') {
+      if (authMode === 'forgot') {
+        const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), { redirectTo: window.location.origin });
+        if (error) throw error;
+        // Mismo mensaje exista o no la cuenta: no revela qué correos están registrados.
+        setAuthSuccess('Si ese correo tiene una cuenta, te enviamos un link para elegir una contraseña nueva. Revisá también el spam.');
+      } else if (authMode === 'login') {
         const { error } = await supabase.auth.signInWithPassword({
           email: authEmail,
           password: authPassword,
@@ -573,10 +585,50 @@ export default function FinanzasDRMIA() {
         });
         if (error) throw error;
         setAuthSuccess('¡Cuenta creada con éxito! Revisá tu correo si te pedimos confirmar y luego iniciá sesión: tenés 10 días gratis con acceso completo.');
+        setNeedsConfirm(true);
         setAuthMode('login');
       }
     } catch (err: any) {
-      setAuthError(err.message || 'Error de autenticación');
+      const m = translateAuthError(err);
+      setAuthError(m.text);
+      if (m.unconfirmed) setNeedsConfirm(true);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function resendConfirmation() {
+    if (!authEmail.trim()) { setAuthError('Escribí tu correo arriba y volvé a tocar el botón.'); return; }
+    setResendBusy(true);
+    setAuthError('');
+    try {
+      const { error } = await supabase.auth.resend({ type: 'signup', email: authEmail.trim() });
+      if (error) throw error;
+      setAuthSuccess('Listo, te reenviamos el correo de confirmación. Revisá también el spam.');
+    } catch (err: any) {
+      setAuthSuccess('');
+      setAuthError(translateAuthError(err).text);
+    } finally {
+      setResendBusy(false);
+    }
+  }
+
+  async function saveNewPassword(e: React.FormEvent) {
+    e.preventDefault();
+    const bad = checkNewPassword(newPass, newPass2);
+    if (bad) { setAuthError(bad); return; }
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPass });
+      if (error) throw error;
+      setNewPass(''); setNewPass2('');
+      setRecovering(false);
+      try { window.history.replaceState({}, '', window.location.pathname); } catch { /* nada */ }
+      setAuthSuccess('');
+      alert('Listo, tu contraseña nueva ya está activa.');
+    } catch (err: any) {
+      setAuthError(translateAuthError(err).text);
     } finally {
       setAuthLoading(false);
     }
@@ -863,6 +915,7 @@ export default function FinanzasDRMIA() {
     // (puede dejar la app colgada). Se difiere con setTimeout.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'TOKEN_REFRESHED') return;
+      if (event === 'PASSWORD_RECOVERY') { setRecovering(true); setAuthError(''); }
       if (session?.user) {
         const u = session.user;
         setUser((prev: any) => (prev?.id === u.id ? prev : u));
@@ -1996,6 +2049,33 @@ export default function FinanzasDRMIA() {
   }, [filteredTransactions, selectedCategoryDetail]);
 
   // ==========================================
+  // RENDER: ELEGIR CONTRASEÑA NUEVA (viene del link del correo)
+  // ==========================================
+  if (recovering && user) {
+    return (
+      <div className="min-h-screen bg-[#08121f] text-slate-100 flex items-center justify-center p-4 font-sans">
+        <form onSubmit={saveNewPassword} className="bg-[#0B192C] max-w-md w-full p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-4">
+          <h1 className="text-xl font-bold text-white text-center">Elegí tu contraseña nueva</h1>
+          <p className="text-xs text-slate-400 text-center">Cuenta: {user.email}</p>
+          <div>
+            <label className="text-xs text-slate-400">Contraseña nueva</label>
+            <input type="password" value={newPass} onChange={e => setNewPass(e.target.value)} placeholder="Mínimo 6 caracteres" autoComplete="new-password" className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl p-3 outline-none text-white focus:border-[#00D7FF]" required />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Repetila</label>
+            <input type="password" value={newPass2} onChange={e => setNewPass2(e.target.value)} autoComplete="new-password" className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl p-3 outline-none text-white focus:border-[#00D7FF]" required />
+          </div>
+          {authError && <p className="text-xs text-rose-400 bg-rose-950/40 p-2.5 rounded-lg border border-rose-800">{authError}</p>}
+          <button type="submit" disabled={authLoading} className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl cursor-pointer">
+            {authLoading ? 'Guardando...' : 'Guardar contraseña'}
+          </button>
+          <button type="button" onClick={() => { setRecovering(false); supabase.auth.signOut(); }} className="w-full text-xs text-slate-400 hover:underline cursor-pointer">Cancelar</button>
+        </form>
+      </div>
+    );
+  }
+
+  // ==========================================
   // RENDER: LANDING PAGE DE VENTA CON PROMO 40% OFF
   // ==========================================
   if (viewMode === 'landing') {
@@ -2183,22 +2263,22 @@ export default function FinanzasDRMIA() {
 
           <div className="text-center space-y-1">
             <h1 className="text-xl font-bold text-white">
-              {authMode === 'login' ? 'Ingresar a tu Cuenta' : 'Empezá tus 10 Días Gratis'}
+              {authMode === 'login' ? 'Ingresar a tu Cuenta' : authMode === 'forgot' ? 'Recuperar tu contraseña' : 'Empezá tus 10 Días Gratis'}
             </h1>
             <p className="text-xs text-slate-400">
-              {authMode === 'login' ? 'Accedé a tu panel de finanzas' : 'Acceso completo con 40% OFF garantizado'}
+              {authMode === 'login' ? 'Accedé a tu panel de finanzas' : authMode === 'forgot' ? 'Te mandamos un link por correo' : 'Acceso completo con 40% OFF garantizado'}
             </p>
           </div>
 
           <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
             <button
-              onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); }}
-              className={`flex-1 py-2 rounded-lg font-semibold transition-all ${authMode === 'login' ? 'bg-[#00D7FF] text-[#0B192C]' : 'text-slate-400'}`}
+              onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); setNeedsConfirm(false); }}
+              className={`flex-1 py-2 rounded-lg font-semibold transition-all ${authMode === 'login' || authMode === 'forgot' ? 'bg-[#00D7FF] text-[#0B192C]' : 'text-slate-400'}`}
             >
               Iniciar Sesión
             </button>
             <button
-              onClick={() => { setAuthMode('register'); setAuthError(''); setAuthSuccess(''); }}
+              onClick={() => { setAuthMode('register'); setAuthError(''); setAuthSuccess(''); setNeedsConfirm(false); }}
               className={`flex-1 py-2 rounded-lg font-semibold transition-all ${authMode === 'register' ? 'bg-[#00D7FF] text-[#0B192C]' : 'text-slate-400'}`}
             >
               Crear Cuenta
@@ -2217,17 +2297,24 @@ export default function FinanzasDRMIA() {
                 required 
               />
             </div>
-            <div>
-              <label className="text-xs text-slate-400">Contraseña</label>
-              <input 
-                type="password" 
-                value={authPassword} 
-                onChange={e => setAuthPassword(e.target.value)} 
-                placeholder="Mínimo 6 caracteres" 
-                className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl p-3 outline-none text-white focus:border-[#00D7FF]" 
-                required 
-              />
-            </div>
+            {authMode !== 'forgot' && (
+              <div>
+                <label className="text-xs text-slate-400">Contraseña</label>
+                <input 
+                  type="password" 
+                  value={authPassword} 
+                  onChange={e => setAuthPassword(e.target.value)} 
+                  placeholder="Mínimo 6 caracteres" 
+                  className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl p-3 outline-none text-white focus:border-[#00D7FF]" 
+                  required 
+                />
+                {authMode === 'login' && (
+                  <button type="button" onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthSuccess(''); setNeedsConfirm(false); }} className="mt-1.5 text-[11px] text-[#00D7FF] hover:underline cursor-pointer">
+                    ¿Olvidaste tu contraseña?
+                  </button>
+                )}
+              </div>
+            )}
 
             {authMode === 'register' && (
               <label className="flex items-start gap-2 text-[11px] text-slate-400 leading-snug cursor-pointer">
@@ -2246,13 +2333,19 @@ export default function FinanzasDRMIA() {
               <p className="text-xs text-emerald-400 bg-emerald-950/40 p-2.5 rounded-lg border border-emerald-800">{authSuccess}</p>
             )}
 
+            {needsConfirm && authMode === 'login' && (
+              <button type="button" onClick={resendConfirmation} disabled={resendBusy} className="w-full text-xs text-[#00D7FF] border border-[#00D7FF]/40 hover:bg-[#00D7FF]/10 disabled:opacity-50 rounded-xl py-2.5 cursor-pointer">
+                {resendBusy ? 'Enviando...' : 'Reenviarme el correo de confirmación'}
+              </button>
+            )}
+
             <button 
               type="submit" 
               disabled={authLoading}
               className="w-full bg-[#00D7FF] hover:bg-[#00B4D8] disabled:opacity-50 text-[#0B192C] font-bold text-xs py-3 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
-              {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : authMode === 'login' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
-              {authLoading ? 'Procesando...' : authMode === 'login' ? 'Entrar al Panel' : 'Activar mis 10 Días Gratis'}
+              {authLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : authMode === 'register' ? <UserPlus className="w-4 h-4" /> : <LogIn className="w-4 h-4" />}
+              {authLoading ? 'Procesando...' : authMode === 'login' ? 'Entrar al Panel' : authMode === 'forgot' ? 'Enviarme el link' : 'Activar mis 10 Días Gratis'}
             </button>
           </form>
         </div>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { computeAccess, FREE_GRANT, isAdminEmail, isFreeGrant } from '@/lib/access';
 import { ApiError, handleError, requireAdmin, requireAdminClient } from '@/lib/server/guard';
+import { rewardReferrer } from '@/lib/server/referrals';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,7 +46,13 @@ export async function PATCH(req: NextRequest) {
     }
     const { error } = await admin.from('payment_receipts').update({ admin_status: status }).eq('id', id);
     if (error) throw new ApiError(500, 'No se pudo actualizar el comprobante.');
-    return NextResponse.json({ ok: true });
+    // Primer pago verificado de alguien invitado: el que lo invitó gana un mes (una sola vez).
+    let referralRewarded = false;
+    if (status === 'verified') {
+      const { data: rec } = await admin.from('payment_receipts').select('user_id, amount, ai_status').eq('id', id).maybeSingle();
+      if (rec) referralRewarded = (await rewardReferrer(admin, rec)).rewarded;
+    }
+    return NextResponse.json({ ok: true, referralRewarded });
   } catch (error) {
     return handleError(error, 'Error actualizando comprobante:');
   }

@@ -22,6 +22,7 @@ export default function Privacidad() {
         <>Datos financieros que cargás vos o que se extraen de los archivos que subís: movimientos, montos, descripciones, tarjetas, billeteras, préstamos, presupuestos, metas y reglas de rubros.</>,
         <>Datos de pago: cuando abonás por transferencia, guardamos el monto, la fecha, el número de operación, el nombre de quien transfiere, el destino y una huella digital del comprobante para evitar que se use dos veces.</>,
         <>Mensajes que nos enviás por el chat de soporte.</>,
+        <>Referidos: un código de invitación propio y el vínculo entre quien invita y quien se registra con ese código, para entregar el mes de regalo.</>,
         <>Datos técnicos básicos de funcionamiento (por ejemplo, registros de errores del servidor) y el contador de usos de la inteligencia artificial de tu cuenta.</>,
       ]} />
       <P>No guardamos el archivo de los extractos, tickets ni comprobantes que subís: se analizan en el momento y solo conservamos el resultado (los movimientos y datos extraídos). No usamos cookies publicitarias ni herramientas de seguimiento de terceros; el navegador guarda únicamente lo necesario para mantener tu sesión abierta.</P>
@@ -31,6 +32,7 @@ export default function Privacidad() {
         'Brindarte el servicio: mostrar tus saldos, gastos, alertas, presupuestos y reportes.',
         'Procesar con inteligencia artificial los extractos y tickets que decidas subir, y generar los diagnósticos que pidas.',
         'Verificar tus pagos y administrar tu suscripción y tu prueba gratuita.',
+        'Enviarte por correo avisos de vencimientos y un resumen semanal (podés desactivarlos en Mi cuenta o con el link al pie de cada correo).',
         'Atender tus consultas de soporte y mantener la seguridad del servicio (evitar abusos y fraudes).',
       ]} />
       <P>No vendemos tus datos ni los usamos para publicidad. No tomamos decisiones automatizadas que produzcan efectos legales sobre vos.</P>
@@ -40,6 +42,7 @@ export default function Privacidad() {
       <UL items={[
         <><strong>Supabase</strong>: base de datos y autenticación (guarda tu cuenta y tus datos).</>,
         <><strong>Vercel</strong>: alojamiento de la aplicación.</>,
+        <><strong>Resend</strong>: envío de los correos de avisos y resumen (recibe tu dirección de correo y el texto del mensaje).</>,
         <><strong>Google (Gemini)</strong> y, como respaldo si el primero no está disponible, <strong>Anthropic (Claude)</strong>: reciben el contenido del archivo que subís (extracto, ticket o comprobante) y, en el caso del diagnóstico, un resumen de tus movimientos, únicamente para devolvernos el resultado.</>,
         <><strong>Servicios públicos de cotización del dólar</strong>: solo se consulta la cotización, sin enviar datos tuyos.</>,
       ]} />

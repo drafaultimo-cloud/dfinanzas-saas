@@ -144,12 +144,21 @@ export interface SubscriptionSuggestion {
   category: string;
   months: number;
   profile: Profile;
+  firstAmount: number;    // importe del primer mes detectado
+  lastAmount: number;     // importe del último mes detectado
+  increasePct: number;    // cuánto subió entre el primero y el último (0 si no subió)
 }
 const median = (a: number[]) => {
   const s = [...a].sort((x, y) => x - y);
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
+/** Cuánto subió el importe entre el primer y el último mes detectado. */
+function priceChange(byMonth: Map<string, Tx>): { firstAmount: number; lastAmount: number; increasePct: number } {
+  const ordered = [...byMonth.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, t]) => Number(t.amount));
+  const first = ordered[0], last = ordered[ordered.length - 1];
+  return { firstAmount: first, lastAmount: last, increasePct: first > 0 && last > first ? Math.round(((last - first) / first) * 1000) / 10 : 0 };
+}
 /** Busca gastos que se repiten todos los meses con importe parecido (≥3 meses distintos). */
 export function detectSubscriptions(txs: Tx[], existing: Tx[], refMonth: string): SubscriptionSuggestion[] {
   const groups = new Map<string, Tx[]>();
@@ -187,6 +196,7 @@ export function detectSubscriptions(txs: Tx[], existing: Tx[], refMonth: string)
       category: cat,
       months: byMonth.size,
       profile: txProfile(sample),
+      ...priceChange(byMonth),
     });
   }
   return out.sort((a, b) => b.months - a.months || b.amount - a.amount);

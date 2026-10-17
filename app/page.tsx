@@ -16,6 +16,10 @@ import {
 import { AccessState, computeAccess, isAdminEmail } from '@/lib/access';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import PlanningHub, { type Tab as PlanningTab } from '@/components/planning/PlanningHub';
+import { buildDemoData, createDemoClient, DEMO_MESSAGE, DEMO_USER, isDemoActive, startDemo, stopDemo, withDemo } from '@/lib/demo';
+import HomeCards from '@/components/planning/HomeCards';
+import ReferralCard from '@/components/planning/ReferralCard';
+import EmailPrefs from '@/components/planning/EmailPrefs';
 import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip';
 import CategorySelect, { saveUserCategory } from '@/components/CategorySelect';
 import { isOlderStatement, reconcileTotal, statementCloseDate } from '@/lib/statement';
@@ -71,7 +75,8 @@ import {
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Mientras el modo demo está activo, el cliente responde con datos de ejemplo (solo lectura).
+const supabase = withDemo(createClient(supabaseUrl, supabaseKey));
 
 const fmtDate = (d?: string | null) => (d ? d.split('-').reverse().join('/') : '');
 const COLORS = ['#FF8042', '#00C49F', '#0088FE', '#faad14', '#8884d8', '#ff4d4f', '#13c2c2', '#a0d911'];
@@ -155,6 +160,8 @@ export default function FinanzasDRMIA() {
   // Autenticación
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
+  const exitDemoRef = useRef<() => void>(() => {});
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
@@ -378,6 +385,7 @@ export default function FinanzasDRMIA() {
 
   // fetch con el token de sesión: las APIs validan usuario y plan en el servidor
   async function authFetch(url: string, init: RequestInit = {}) {
+    if (isDemoActive()) return new Response(JSON.stringify({ error: DEMO_MESSAGE }), { status: 403, headers: { 'Content-Type': 'application/json' } });
     const { data } = await supabase.auth.getSession();
     const headers = new Headers(init.headers);
     if (data.session?.access_token) headers.set('Authorization', `Bearer ${data.session.access_token}`);
@@ -393,6 +401,43 @@ export default function FinanzasDRMIA() {
       return { error: `Error del servidor (${res.status}). Reintentá en unos minutos.` };
     }
   }
+
+  // Modo demo: datos de ejemplo, sin cuenta y sin guardar nada.
+  function enterDemo() {
+    const data = buildDemoData(new Date());
+    startDemo(createDemoClient(data, () => exitDemoRef.current()));
+    bootstrappedFor.current = DEMO_USER.id;
+    monthInitialized.current = true;
+    planningJobsDone.current = DEMO_USER.id;
+    setUser(DEMO_USER);
+    setAccess({ status: 'paid', plan: 'pro', trialDaysLeft: 0, paidUntil: null, free: true });
+    setTransactions(data.transactions);
+    setCreditCards(data.credit_cards);
+    setLoans(data.loans);
+    setCardPlans([]);
+    setCategoryRules(data.category_rules);
+    setSelectedMonth(todayLocal().slice(0, 7));
+    setDemoMode(true);
+    setLoading(false);
+    setViewMode('app');
+  }
+  function exitDemo() {
+    stopDemo();
+    setDemoMode(false);
+    bootstrappedFor.current = null;
+    monthInitialized.current = false;
+    planningJobsDone.current = null;
+    setUser(null);
+    setAccess(null);
+    setTransactions([]);
+    setCreditCards([]);
+    setLoans([]);
+    setCardPlans([]);
+    setCategoryRules([]);
+    setSelectedMonth('all');
+    setViewMode('landing');
+  }
+  exitDemoRef.current = exitDemo;
 
   async function bootstrapUser(u: any) {
     if (bootstrappedFor.current === u.id) return;
@@ -794,6 +839,24 @@ export default function FinanzasDRMIA() {
     saveNetWorthSnapshot(supabase, user.id, creditCards, loans, usdRate).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, viewingOwner, loading, creditCards, loans, usdRate]);
+
+  // Referidos: se guarda el código del link (?ref=XXXX) y se registra al iniciar sesión por primera vez.
+  useEffect(() => {
+    try {
+      const ref = new URLSearchParams(window.location.search).get('ref');
+      if (ref) localStorage.setItem('drm-ref', ref.slice(0, 12));
+    } catch { /* sin almacenamiento */ }
+  }, []);
+  useEffect(() => {
+    if (!user || demoMode) return;
+    let code = '';
+    try { code = localStorage.getItem('drm-ref') || ''; } catch { /* nada */ }
+    if (!code) return;
+    authFetch('/api/referral', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })
+      .then(r => { if (r.ok) { try { localStorage.removeItem('drm-ref'); } catch { /* nada */ } } })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, demoMode]);
 
   useEffect(() => {
     // Importante: NO hacer await de consultas de Supabase dentro de este callback
@@ -2006,6 +2069,9 @@ export default function FinanzasDRMIA() {
               <Smartphone className="w-4 h-4 text-[#00D7FF]" /> Descargar App en el Celular
             </button>
           </div>
+          <button onClick={enterDemo} className="text-sm text-[#00D7FF] underline underline-offset-4 hover:text-white cursor-pointer">
+            ▶ Probar la demo ahora, sin registrarme
+          </button>
         </header>
 
         {/* Tabla de Planes */}
@@ -2295,6 +2361,17 @@ export default function FinanzasDRMIA() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
+        {demoMode && (
+          <div className="sticky top-2 z-30 bg-sky-600 text-white rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs shadow-lg">
+            <span>🎬 <strong>Estás viendo una demo</strong> con datos de ejemplo. Podés tocar todo, pero no se guarda nada.</span>
+            <button
+              onClick={() => { exitDemo(); setAuthMode('register'); setViewMode('app'); }}
+              className="bg-white text-sky-700 font-bold px-3 py-1.5 rounded-xl cursor-pointer"
+            >
+              Crear mi cuenta gratis
+            </button>
+          </div>
+        )}
         
         {/* Header */}
         <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
@@ -2320,7 +2397,10 @@ export default function FinanzasDRMIA() {
                         <Gift className="w-3 h-3 text-amber-600" /> Prueba: {trialDaysLeft} días
                       </span>
                     )}
-                    {hasPaidPlan && (
+                    {demoMode && (
+                      <span className="bg-sky-100 text-sky-800 border border-sky-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold">Modo demo</span>
+                    )}
+                    {hasPaidPlan && !demoMode && (
                       <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
                         {`Plan ${access?.plan === 'pro' ? 'Pro IA' : 'Esencial'} activo`}{access?.free ? ' · acceso gratuito' : access?.paidUntil ? ` · hasta ${new Date(access.paidUntil).toLocaleDateString('es-AR')}` : ''}
                       </span>
@@ -2543,6 +2623,22 @@ export default function FinanzasDRMIA() {
             onGo={goToAlert}
           />
         )}
+        {user && (
+          <HomeCards
+            supabase={supabase}
+            userId={viewingOwner?.id || user.id}
+            ownUserId={user.id}
+            readOnly={!!viewingOwner}
+            transactions={transactions}
+            creditCards={creditCardsEff}
+            loans={loansEff}
+            profile={profileType}
+            usdRate={usdRate}
+            onChanged={() => {}}
+            onGo={goToAlert}
+          />
+        )}
+        {user && !viewingOwner && !demoMode && <ReferralCard authFetch={authFetch} />}
 
         {/* Auditor IA */}
         <div className="bg-gradient-to-r from-[#0B192C] to-[#132238] p-4 rounded-2xl border border-slate-800 flex flex-wrap justify-between items-center gap-3">
@@ -3356,6 +3452,7 @@ export default function FinanzasDRMIA() {
                 <a href="/terminos" target="_blank" rel="noopener" className="text-blue-600 underline">Términos y Condiciones</a>
                 <a href="/privacidad" target="_blank" rel="noopener" className="text-blue-600 underline">Política de Privacidad</a>
               </div>
+              {!demoMode && <EmailPrefs authFetch={authFetch} />}
               <div>
                 <p className="mb-2">Descargá una copia de todos tus datos (movimientos, tarjetas, billeteras, presupuestos, etc.) en un archivo JSON.</p>
                 <button onClick={exportMyData} disabled={accountBusy} className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 font-bold text-slate-700 disabled:opacity-50 cursor-pointer">
@@ -4568,7 +4665,8 @@ export default function FinanzasDRMIA() {
         const pendingList = adminReceipts.filter(r => r.admin_status === 'pending');
         const fmtDate = (d?: string) => (d ? new Date(d).toLocaleDateString('es-AR') : '—');
         const aiLabel = (r: any) =>
-          r.ai_status === 'approved_by_ai' ? { t: 'IA: aprobado (habilitado)', c: 'bg-emerald-100 text-emerald-800' }
+          r.ai_status === 'referral_bonus' ? { t: 'Bono por referido (+1 mes)', c: 'bg-violet-100 text-violet-800' }
+          : r.ai_status === 'approved_by_ai' ? { t: 'IA: aprobado (habilitado)', c: 'bg-emerald-100 text-emerald-800' }
           : r.ai_status === 'pending_manual' ? { t: 'Revisión manual obligatoria', c: 'bg-sky-100 text-sky-800' }
           : { t: 'IA: rechazado', c: 'bg-amber-100 text-amber-800' };
         const userRows = adminUsersList.map((u: any) => {

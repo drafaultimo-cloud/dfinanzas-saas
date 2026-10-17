@@ -113,12 +113,21 @@ export default function Recurring(p: HubProps) {
 
       {!p.readOnly && suggestions.length > 0 && (
         <Card title="Suscripciones detectadas" subtitle="Gastos que se repiten todos los meses con un importe parecido. Si los convertís en recurrentes, se cargan solos.">
+          {(() => {
+            const monthly = suggestions.filter(s => s.currency !== 'USD').reduce((a, s) => a + s.amount, 0);
+            return monthly > 0 ? (
+              <p className="text-xs text-slate-700 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+                Estas suscripciones te cuestan unos <strong>{formatArs(monthly)} por mes</strong> ({formatArs(monthly * 12)} por año). ¿Seguís usando todas?
+              </p>
+            ) : null;
+          })()}
           <div className="divide-y divide-slate-100">
             {suggestions.slice(0, 8).map(s => (
               <div key={s.key} className="flex items-center justify-between py-2 text-xs">
                 <span className="flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-amber-500" />
                   <span className="font-semibold text-slate-800">{s.description}</span>
                   <span className="text-slate-400">· {s.months} meses seguidos · día {s.day}</span>
+                  {s.increasePct >= 3 && <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-full px-1.5 py-0.5">subió {Math.round(s.increasePct)}%</span>}
                 </span>
                 <span className="flex items-center gap-3">
                   <span className="font-bold text-slate-700">{s.currency === 'USD' ? `u$s ${s.amount}` : formatArs(s.amount)}</span>

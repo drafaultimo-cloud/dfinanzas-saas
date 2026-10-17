@@ -19,3 +19,10 @@ SaaS de control de finanzas personales y de comercios (pesos y dólares) con IA:
 ## Planes
 
 Prueba de 10 días con acceso Pro; cada pago aprobado suma 30 días. Esencial no incluye importador IA, auditor ni bola de nieve (también se bloquea en el servidor).
+
+## Referidos y correos (migración 016)
+
+- Ejecutar `supabase/migrations/016_referidos_y_correos.sql` en el SQL Editor de Supabase.
+- Referidos: cada usuario tiene un link `https://finanzas.drm-ia.com/?ref=CODIGO`. Cuando el administrador verifica el primer pago real del invitado, quien invitó recibe un comprobante `referral_bonus` (30 días de Plan Pro). Máximo 12 premios por usuario.
+- Correos: variables `RESEND_API_KEY`, `DIGEST_FROM` y `CRON_SECRET` en Vercel. `vercel.json` programa `/api/cron/digest` todos los días a las 11:00 UTC (8:00 en Argentina): avisos de vencimientos y presupuestos, y el lunes el resumen semanal.
+- Probar sin enviar: `curl -H "Authorization: Bearer $CRON_SECRET" "https://finanzas.drm-ia.com/api/cron/digest?dry=1&weekly=1"`.

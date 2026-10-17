@@ -20,6 +20,7 @@ import { buildDemoData, createDemoClient, DEMO_MESSAGE, DEMO_USER, isDemoActive,
 import HomeCards from '@/components/planning/HomeCards';
 import ReferralCard from '@/components/planning/ReferralCard';
 import EmailPrefs from '@/components/planning/EmailPrefs';
+import Landing from '@/components/Landing';
 import { checkNewPassword, translateAuthError } from '@/lib/authErrors';
 import AlertsStrip, { type AlertTarget } from '@/components/planning/AlertsStrip';
 import CategorySelect, { saveUserCategory } from '@/components/CategorySelect';
@@ -2080,159 +2081,12 @@ export default function FinanzasDRMIA() {
   // ==========================================
   if (viewMode === 'landing') {
     return (
-      <div className="min-h-screen bg-[#08121f] text-slate-100 font-sans selection:bg-[#00D7FF] selection:text-[#0B192C]">
-        <div className="bg-gradient-to-r from-[#00D7FF] via-cyan-500 to-blue-600 text-[#0B192C] py-2 px-4 text-center text-xs font-black tracking-wide flex items-center justify-center gap-2">
-          <Gift className="w-4 h-4 animate-bounce" />
-          <span>PROMO LANZAMIENTO: 40% DE BONIFICACIÓN POR 6 MESES • 10 DÍAS DE PRUEBA COMPLETA GRATIS</span>
-        </div>
-
-        <nav className="max-w-6xl mx-auto px-6 py-5 flex justify-between items-center border-b border-slate-800/80">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#00D7FF]/10 border border-[#00D7FF]/30 flex items-center justify-center text-[#00D7FF] font-bold text-xl shadow-[0_0_15px_rgba(0,215,255,0.2)]">
-              ▲
-            </div>
-            <div>
-              <span className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                DRM-IA <span className="text-xs bg-[#00D7FF]/10 text-[#00D7FF] px-2.5 py-0.5 rounded-full border border-[#00D7FF]/30">Finanzas</span>
-              </span>
-              <p className="text-[10px] text-slate-400">Soluciones Integrales para tu Negocio</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2.5">
-            <button 
-              onClick={handleInstallApp}
-              className="hidden sm:flex text-xs font-bold bg-slate-800 border border-slate-700 text-[#00D7FF] px-3 py-2 rounded-xl hover:bg-slate-700 transition-colors items-center gap-1.5 cursor-pointer"
-            >
-              <Smartphone className="w-3.5 h-3.5" /> Descargar App Celular
-            </button>
-            <button 
-              onClick={() => { setAuthMode('login'); setViewMode('app'); }}
-              className="text-xs font-semibold text-slate-300 hover:text-white px-3 py-2 transition-colors cursor-pointer"
-            >
-              Iniciar Sesión
-            </button>
-            <button 
-              onClick={() => { setAuthMode('register'); setViewMode('app'); }}
-              className="text-xs font-bold bg-[#00D7FF] text-[#0B192C] px-4 py-2.5 rounded-xl hover:bg-[#00B4D8] transition-all shadow-lg shadow-[#00D7FF]/20 flex items-center gap-1.5 cursor-pointer"
-            >
-              Probar 10 Días Gratis <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </nav>
-
-        <header className="max-w-4xl mx-auto px-6 pt-14 pb-12 text-center space-y-6">
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#0B192C] border border-[#00D7FF]/40 text-[#00D7FF] text-xs font-semibold shadow-sm">
-            <Sparkles className="w-3.5 h-3.5 text-[#00D7FF]" />
-            Auditoría Bimonetaria Inteligente • Pesos y Dólares con Google Gemini 3.8 Flash
-          </div>
-
-          <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-tight">
-            Controlá tus tarjetas en <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00D7FF] to-cyan-400">Pesos y Dólares</span> con Finanzas de DRM-IA
-          </h1>
-
-          <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto font-normal leading-relaxed">
-            Importá extractos con compras, pagos y reintegros. Clasificación exacta en dos monedas y detección de saldos a favor sin duplicados.
-          </p>
-
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
-            <button 
-              onClick={() => { setAuthMode('register'); setViewMode('app'); }}
-              className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-sm hover:opacity-95 transition-all shadow-xl shadow-[#00D7FF]/20 flex items-center justify-center gap-2 cursor-pointer"
-            >
-              Comenzar Prueba de 10 Días Gratis <ArrowRight className="w-4 h-4" />
-            </button>
-            <button 
-              onClick={handleInstallApp}
-              className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#0B192C] border border-[#00D7FF]/40 text-white font-semibold text-sm hover:bg-[#132238] transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Smartphone className="w-4 h-4 text-[#00D7FF]" /> Descargar App en el Celular
-            </button>
-          </div>
-          <button onClick={enterDemo} className="text-sm text-[#00D7FF] underline underline-offset-4 hover:text-white cursor-pointer">
-            ▶ Probar la demo ahora, sin registrarme
-          </button>
-        </header>
-
-        {/* Tabla de Planes */}
-        <section className="max-w-5xl mx-auto px-6 py-16 border-t border-slate-800/80">
-          <div className="text-center max-w-xl mx-auto mb-12 space-y-2">
-            <div className="inline-block bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[11px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider mb-2">
-              Oferta por Tiempo Limitado
-            </div>
-            <h2 className="text-2xl md:text-3xl font-bold text-white">Planes con 40% de Descuento por 6 Meses</h2>
-            <p className="text-xs text-slate-400">Probá todas las funciones gratis durante 10 días. El día 11 activás tu tarifa bonificada.</p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-            <div className="bg-[#0B192C] p-8 rounded-3xl border border-slate-800 space-y-6 flex flex-col justify-between">
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-lg font-bold text-white">Plan Esencial</h3>
-                  <span className="text-[10px] bg-[#00D7FF]/10 text-[#00D7FF] font-bold px-2 py-0.5 rounded border border-[#00D7FF]/30">40% OFF x 6 MESES</span>
-                </div>
-                <p className="text-xs text-slate-400">Ideal para control presupuestario personal y seguimiento de tarjetas.</p>
-                <div>
-                  <span className="text-xs text-slate-500 line-through mr-2">$ {PLAN_ESENCIAL_REGULAR.toLocaleString('es-AR')}</span>
-                  <span className="text-3xl font-extrabold text-white">$ {PLAN_ESENCIAL_PROMO.toLocaleString('es-AR')}</span>
-                  <span className="text-xs text-slate-400 font-normal"> / mes</span>
-                </div>
-                <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Carga manual ilimitada de gastos e ingresos</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Control bimonetario (Pesos y Dólares)</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Semáforo de endeudamiento y desglose de rubros</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> App instalable en Android e iOS</li>
-                </ul>
-              </div>
-              <button 
-                onClick={() => { setAuthMode('register'); setViewMode('app'); }}
-                className="w-full py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition-colors cursor-pointer"
-              >
-                Probar 10 Días Gratis
-              </button>
-            </div>
-
-            <div className="bg-[#132238] p-8 rounded-3xl border-2 border-[#00D7FF] space-y-6 flex flex-col justify-between relative shadow-2xl">
-              <div className="absolute -top-3.5 right-6 bg-[#00D7FF] text-[#0B192C] text-[10px] font-extrabold uppercase px-3 py-1 rounded-full tracking-wider">
-                Recomendado • 40% OFF
-              </div>
-              <div className="space-y-4">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  Plan Pro IA <Sparkles className="w-4 h-4 text-[#00D7FF]" />
-                </h3>
-                <p className="text-xs text-slate-400">Automatización total para profesionales, comercios y billeteras.</p>
-                <div>
-                  <span className="text-xs text-slate-500 line-through mr-2">$ {PLAN_PRO_REGULAR.toLocaleString('es-AR')}</span>
-                  <span className="text-3xl font-extrabold text-white">$ {PLAN_PRO_PROMO.toLocaleString('es-AR')}</span>
-                  <span className="text-xs text-slate-400 font-normal"> / mes</span>
-                </div>
-                <ul className="space-y-2.5 text-xs text-slate-300 pt-2">
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Todo lo incluido en el Plan Esencial</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Importador IA con detección de compras, pagos y reintegros</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Manejo independiente de saldos en ARS y USD</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Auditor Financiero IA (&quot;Diagnóstico Mensual&quot;)</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Simulador Bola de Nieve para deudas</li>
-                  <li className="flex items-center gap-2"><Check className="w-4 h-4 text-[#00D7FF]" /> Soporte y chat directo con Dionicio</li>
-                </ul>
-              </div>
-              <button 
-                onClick={() => { setAuthMode('register'); setViewMode('app'); }}
-                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-[#00D7FF] to-cyan-500 text-[#0B192C] font-bold text-xs hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-[#00D7FF]/20"
-              >
-                Activar con 40% OFF (10 Días Gratis)
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <footer className="border-t border-slate-800/80 py-8 text-center text-xs text-slate-500">
-          © 2026 DRM-IA • Soluciones Integrales e Inteligencia Artificial • Río Gallegos
-          <div className="mt-2 flex justify-center gap-4">
-            <a href="/terminos" className="hover:text-slate-300 underline">Términos y Condiciones</a>
-            <a href="/privacidad" className="hover:text-slate-300 underline">Política de Privacidad</a>
-          </div>
-        </footer>
-      </div>
+      <Landing
+        onRegister={() => { setAuthMode('register'); setViewMode('app'); }}
+        onLogin={() => { setAuthMode('login'); setViewMode('app'); }}
+        onDemo={enterDemo}
+        onInstall={handleInstallApp}
+      />
     );
   }
 
